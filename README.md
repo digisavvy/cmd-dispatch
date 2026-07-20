@@ -65,6 +65,13 @@ dispatch clean 52             # remove worktree + branch + job state (to reassig
 dispatch pr 41                # push branch + open PR closing the issue (after you review)
 ```
 
+## Documentation
+
+- [Usage](docs/usage.md) - install, CLI commands, `/dispatch`, and model aliases
+- [Architecture](docs/architecture.md) - worktrees, worker processes, state files, and PR gate
+- [Limitations](docs/limitations.md) - current boundaries and missing commands
+- [Codex events](docs/codex-events.md) - observed `codex exec --json` event vocabulary
+
 ## Design notes / limits
 
 - **Subscription auth, no API keys.** dispatch shells out to `codex`, which holds its own login.
