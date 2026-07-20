@@ -63,13 +63,25 @@ job_state() {
   if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then echo "RUNNING"; else echo "KILLED"; fi
 }
 
-# Last structured event codex emitted (--json is JSONL); fall back to last log line.
+# Human summary of the latest codex --json event. Schema (see docs/codex-events.md):
+#   thread.started | turn.started | item.started | item.completed | turn.completed
+#   item.type ∈ { agent_message(.text) | file_change(.changes[]) | command_execution(.command,.exit_code) }
 last_event() {
-  local log="$1" line
-  line="$(grep -E '^\s*\{' "$log" 2>/dev/null | tail -1)"
-  [[ -z "$line" ]] && line="$(tail -1 "$log" 2>/dev/null || true)"
-  if command -v jq >/dev/null 2>&1 && echo "$line" | jq -e . >/dev/null 2>&1; then
-    echo "$line" | jq -r '(.type // .msg.type // "event") + ": " + ((.msg.message // .message // .text // .delta // "") | tostring[0:120])' 2>/dev/null || echo "$line"
+  local f="$1" line
+  line="$(grep -E '^\s*\{' "$f" 2>/dev/null | tail -1)"
+  [[ -z "$line" ]] && line="$(tail -1 "$f" 2>/dev/null || true)"
+  [[ -z "$line" ]] && return
+  if command -v jq >/dev/null 2>&1 && printf '%s\n' "$line" | jq -e . >/dev/null 2>&1; then
+    printf '%s\n' "$line" | jq -r '
+      if (.type | test("^item")) then
+        (.item.type) as $it |
+        if   $it=="agent_message"     then "msg: "  + (((.item.text//"")|gsub("\\s+";" "))[0:120])
+        elif $it=="command_execution" then "run: "  + (((.item.command//"")|gsub("\\s+";" "))[0:90]) + (if .item.exit_code!=null then " (exit \(.item.exit_code))" else " …" end)
+        elif $it=="file_change"       then "edit: " + ([.item.changes[]? | "\(.kind) \(.path|split("/")|last)"] | join(", "))
+        else (.type + " " + ($it // "")) end
+      elif .type=="turn.completed" then "turn done (\(.usage.output_tokens // "?") out tok)"
+      elif .type=="thread.started" then "started"
+      else .type end' 2>/dev/null || echo "${line:0:140}"
   else
     echo "${line:0:140}"
   fi
@@ -161,8 +173,11 @@ EOF
   # -C targets the worktree; -o writes the worker's final message for clean status reporting.
   cat > "$jd/run.sh" <<EOF
 #!/usr/bin/env bash
+# Keep stdout (--json JSONL events) and stderr (human progress) in separate files so a TUI/
+# status can parse clean events while 'dispatch logs' shows readable progress.
 codex exec -C "$wt" -m "$model" --sandbox workspace-write --json \\
-  -o "$jd/last_message.txt" "\$(cat "$jd/prompt.txt")"
+  -o "$jd/last_message.txt" "\$(cat "$jd/prompt.txt")" \\
+  > "$jd/events.jsonl" 2> "$jd/worker.log"
 echo \$? > "$jd/exitcode"
 EOF
   chmod +x "$jd/run.sh"
@@ -176,7 +191,8 @@ worktree=$wt
 started_at=$(now)
 EOF
 
-  nohup bash "$jd/run.sh" > "$jd/worker.log" 2>&1 &
+  # run.sh owns worker.log (stderr) and events.jsonl (stdout); wrapper noise is discarded.
+  nohup bash "$jd/run.sh" >/dev/null 2>&1 &
   echo $! > "$jd/pid"
   echo "$(now) start issue=$n alias=$alias model=$model pid=$(cat "$jd/pid")" >> "$sd/ledger.log"
 
@@ -194,7 +210,7 @@ print_job_row() { # print_job_row <jobdir>
   if [[ "$st" != "RUNNING" && -s "$jd/last_message.txt" ]]; then
     ev="final: $(tr '\n' ' ' < "$jd/last_message.txt" | cut -c1-160)"
   else
-    ev="$(last_event "$jd/worker.log")"
+    ev="$(last_event "$jd/events.jsonl")"
   fi
   [[ -n "$ev" ]] && printf "         └─ %s\n" "$ev"
 }
