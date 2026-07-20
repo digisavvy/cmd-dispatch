@@ -23,20 +23,15 @@ verbatim.
 ## Model selection (Claude-`/model`-style picker)
 
 When the user gives issues but **no model** for one or more of them, do NOT guess and do NOT pick a
-default silently. Present a selection menu with the AskUserQuestion tool so they choose from the list —
-this is the pick-from-a-list experience they want. Offer these options (label → alias to pass to the CLI):
-
-- **5.6 Sol — frontier** (`5.6`) · most capable agentic coding, slowest/priciest
-- **5.6 Terra — balanced** (`5.6-terra`) · everyday work
-- **5.6 Luna — fast/cheap** (`5.6-luna`) · simpler tasks
-- **5.5 — frontier prior gen** (`5.5`) · complex coding/research
-- **5.4 Mini — cheapest** (`mini`) · trivial tasks
+default silently. First run **`dispatch models`** to get the current `alias → model → description`
+list, then present a selection menu with the AskUserQuestion tool built from that output — one option
+per alias, using the description as the option detail. Building the menu from `dispatch models` keeps
+it in sync with `models.conf` automatically; never hardcode model names in this command.
 
 Rules for the picker:
 - If several issues need a model, ask whether to apply one model to all, or pick per-issue — then run
-  the menu accordingly (one selection applied to all, or one selection per issue).
-- If the source of truth for models changes, keep this list in sync with `models.conf` /
-  `dispatch doctor`. Never invent a model string; only offer aliases that exist in `models.conf`.
+  the menu accordingly (one selection applied to all, or one per issue).
+- Only offer aliases that `dispatch models` prints. Never invent a model string.
 - Inline assignments always win — if the user already said "5.6 on #41", don't re-ask for #41.
 
 ## Dispatch

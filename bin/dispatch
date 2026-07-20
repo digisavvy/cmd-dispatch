@@ -7,6 +7,7 @@
 #
 # Subcommands:
 #   dispatch doctor                       Check deps, list real Codex model strings, validate aliases
+#   dispatch models                       List model aliases -> real slugs + descriptions
 #   dispatch start <issue#> <model> [-R repo]   Spawn a worker on an issue
 #   dispatch status [issue#]              Show all jobs (or one) with live state
 #   dispatch logs <issue#> [-f]           Tail a worker's log
@@ -294,10 +295,28 @@ cmd_clean() {
   echo "cleaned #$n (worktree, branch, and job state removed)."
 }
 
+# List model aliases with their resolved slug and (if available) the Codex description.
+# The /dispatch picker builds its menu from this, so options never drift from models.conf.
+cmd_models() {
+  [[ -f "$MODELS_CONF" ]] || die "no models.conf at $MODELS_CONF (copy models.conf.example)"
+  local cache="$HOME/.codex/models_cache.json" alias slug desc
+  printf "%-10s %-16s %s\n" "ALIAS" "MODEL" "DESCRIPTION"
+  grep -E '^[[:space:]]*[^#].*=' "$MODELS_CONF" | while IFS= read -r line; do
+    alias="$(printf '%s' "$line" | sed 's/=.*//; s/[[:space:]]//g')"
+    slug="$(printf '%s' "$line" | sed 's/^[^=]*=//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+    desc=""
+    if [[ -f "$cache" ]] && command -v jq >/dev/null 2>&1; then
+      desc="$(jq -r --arg s "$slug" '.models[]? | select(.slug==$s) | .description // ""' "$cache" 2>/dev/null | head -1)"
+    fi
+    printf "%-10s %-16s %s\n" "$alias" "$slug" "$desc"
+  done
+}
+
 main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
     doctor) cmd_doctor "$@" ;;
+    models) cmd_models "$@" ;;
     start)  cmd_start "$@" ;;
     status) cmd_status "$@" ;;
     logs)   cmd_logs "$@" ;;
