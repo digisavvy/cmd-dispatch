@@ -134,7 +134,7 @@ cmd_start() {
   need codex "run: dispatch doctor"
   need gh; need git; need jq
 
-  local root sd jd model branch wt issue_json title body
+  local root sd jd model branch wt issue_json title body gitcommon
   root="$(repo_root "$repo")"
   sd="$root/.dispatch"; jd="$sd/jobs/$n"
   [[ -e "$jd" ]] && die "job for issue #$n already exists. (dispatch status $n | dispatch stop $n | dispatch clean $n)"
@@ -169,13 +169,18 @@ EOF
   git -C "$root" worktree add -b "$branch" "$wt" >/dev/null 2>&1 \
     || die "worktree add failed (branch '$branch' may already exist; try: dispatch clean $n)"
 
+  # A worktree's git metadata lives under the MAIN repo's .git (the common dir), OUTSIDE the
+  # worktree. codex --sandbox workspace-write can't write there, so `git commit` fails with
+  # "Operation not permitted" on index.lock. Make the common .git writable via --add-dir.
+  gitcommon="$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir)"
+
   # Per-job runner avoids nested-quote hell and captures the exit code.
   # -C targets the worktree; -o writes the worker's final message for clean status reporting.
   cat > "$jd/run.sh" <<EOF
 #!/usr/bin/env bash
 # Keep stdout (--json JSONL events) and stderr (human progress) in separate files so a TUI/
 # status can parse clean events while 'dispatch logs' shows readable progress.
-codex exec -C "$wt" -m "$model" --sandbox workspace-write --json \\
+codex exec -C "$wt" -m "$model" --sandbox workspace-write --add-dir "$gitcommon" --json \\
   -o "$jd/last_message.txt" "\$(cat "$jd/prompt.txt")" \\
   > "$jd/events.jsonl" 2> "$jd/worker.log"
 echo \$? > "$jd/exitcode"
