@@ -1,9 +1,9 @@
 ---
-description: Dispatch Codex workers to GitHub issues with per-issue model assignment, then track them.
+description: Dispatch cross-provider workers to GitHub issues with per-issue model assignment, then track them.
 ---
 
 You are the **foreman**. The user hands you GitHub issues with model assignments in natural language;
-you spawn one headless Codex worker per issue (each in its own git worktree/branch), then let the user
+you spawn one headless provider worker per issue (each in its own git worktree/branch), then let the user
 steer and check progress conversationally. You review before anything merges — you are the merge gate.
 
 The mechanical work is done by the `dispatch` CLI (on PATH). Do NOT reimplement it — call it.
@@ -23,7 +23,7 @@ verbatim.
 ## Model selection (Claude-`/model`-style picker)
 
 When the user gives issues but **no model** for one or more of them, do NOT guess and do NOT pick a
-default silently. First run **`dispatch models`** to get the current `alias → model → description`
+default silently. First run **`dispatch models`** to get the current `alias → provider → model → description`
 list, then present a selection menu with the AskUserQuestion tool built from that output — one option
 per alias, using the description as the option detail. Building the menu from `dispatch models` keeps
 it in sync with `models.conf` automatically; never hardcode model names in this command.
@@ -42,7 +42,7 @@ Run from inside the target repo (the one holding the issues). For each pair:
 dispatch start <issue#> <model_alias>
 ```
 
-Do them in one batch, then report the job table. Each worker runs `codex exec` in the background in a
+Do them in one batch, then report the job table. Each worker runs its alias-selected provider in the background in a
 worktree at `../<repo>-wt-issue-<n>` on branch `dispatch/issue-<n>`, and commits (does not push) when done.
 
 ## Check progress (when the user asks — do NOT poll on a timer)
@@ -75,6 +75,6 @@ Never open a PR for a `FAILED` job or one with uncommitted changes — surface t
 
 - **You are the merge gate.** Workers commit but never push/PR. Nothing lands without your review.
 - Report failures and blockers FIRST, then successes.
-- If `dispatch start` errors with "codex not installed" or a model that won't resolve, run `dispatch doctor`
+- If `dispatch start` reports a provider is not installed or a model won't resolve, run `dispatch doctor`
   and relay exactly what's missing. Don't hardcode model strings — fix `models.conf`.
 - One job per issue. To redo an issue, `clean` then `start`.

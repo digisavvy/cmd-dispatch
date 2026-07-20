@@ -1,6 +1,6 @@
 # Usage
 
-`dispatch` is a small Bash CLI plus a Claude Code slash command for assigning headless Codex workers to GitHub issues. Run it from the target repository unless a command documents `-R <repo>`.
+`dispatch` is a small Bash CLI plus a Claude Code slash command for assigning headless Codex or Claude workers to GitHub issues. Run it from the target repository unless a command documents `-R <repo>`.
 
 ## Install
 
@@ -39,7 +39,7 @@ dispatch doctor
 
 ### `dispatch doctor`
 
-Checks for `git`, `gh`, `jq`, and `codex`, prints Codex model help when available, and lists configured aliases from `models.conf`.
+Checks core dependencies, reports Codex, Claude, and Gemini paths/versions in a Providers section, and lists configured aliases.
 
 ```sh
 dispatch doctor
@@ -47,9 +47,9 @@ dispatch doctor
 
 ### `dispatch start <issue#> <model> [-R repo]`
 
-Starts one worker for one GitHub issue. `dispatch` fetches the issue title/body with `gh issue view`, creates a worktree at `../<repo>-wt-issue-<n>`, creates branch `dispatch/issue-<n>`, writes job state under `.dispatch/jobs/<n>/`, and launches `codex exec` with `nohup`.
+Starts one worker for one GitHub issue. `dispatch` fetches the issue title/body with `gh issue view`, creates a worktree at `../<repo>-wt-issue-<n>`, creates branch `dispatch/issue-<n>`, writes job state under `.dispatch/jobs/<n>/`, and launches the selected provider CLI with `nohup`.
 
-`<model>` can be an alias from `models.conf` or a raw Codex model string.
+`<model>` is normally an alias from `models.conf`; its value selects the provider. Start errors before creating a worktree if that provider CLI is missing. Raw `gpt-*`, `claude-*`, and `gemini-*` slugs are also inferable.
 
 ```sh
 dispatch start 41 5.6
@@ -157,22 +157,25 @@ DISPATCH_MODELS_CONF=/path/to/models.conf dispatch start 41 5.6
 The format is:
 
 ```conf
-alias = exact-codex-model-string
+alias = provider exact-model-string
 ```
 
 The example file defines:
 
 ```conf
-5.6       = gpt-5.6-sol
-5.5       = gpt-5.5
-5.4       = gpt-5.4
-mini      = gpt-5.4-mini
-default   = gpt-5.6-terra
-5.6-sol   = gpt-5.6-sol
-5.6-terra = gpt-5.6-terra
-5.6-luna  = gpt-5.6-luna
+5.6       = codex gpt-5.6-sol
+5.5       = codex gpt-5.5
+5.4       = codex gpt-5.4
+mini      = codex gpt-5.4-mini
+default   = codex gpt-5.6-terra
+5.6-sol   = codex gpt-5.6-sol
+5.6-terra = codex gpt-5.6-terra
+5.6-luna  = codex gpt-5.6-luna
+sonnet    = claude sonnet
+opus      = claude opus
+haiku     = claude haiku
 ```
 
-Model resolution is simple: `dispatch start` looks for the first non-comment assignment matching the provided model key and uses the value after `=`. If no match is found, the key is passed through unchanged as the Codex model string.
+Model resolution treats the first value token as provider and the remainder as model. Unmatched strings error unless their provider can be inferred from the raw slug.
 
 Use `dispatch doctor` after Codex upgrades to check the currently available model strings and update `models.conf`.

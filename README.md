@@ -1,8 +1,9 @@
 # cmd-dispatch
 
 A thin **conversational foreman** for coding agents. You talk to a lead agent (Claude Code / Fable)
-and say *"put 5.6 on #41, 5.5 on the other two"* — it spawns one headless **Codex** worker per GitHub
-issue, each in its own git worktree/branch, and lets you steer and check progress by chatting. The lead
+and say *"put sonnet on #41, 5.6 on the other two"* — it spawns one headless **Codex or Claude** worker
+per GitHub issue, using the provider implied by the model alias. Each gets its own git worktree/branch,
+and the lead
 reviews before anything merges.
 
 This is deliberately **not** a framework. It's a small CLI (`bin/dispatch`) plus a slash command
@@ -39,11 +40,11 @@ codex login                # use your ChatGPT subscription (Pro/Plus) — intera
 dispatch doctor            # verifies deps + prints the REAL model strings for models.conf
 ```
 
-Then edit **`models.conf`** so your aliases point at real Codex model strings (doctor shows them):
+Then edit **`models.conf`** so your aliases name a provider and model (doctor detects installed CLIs):
 
 ```
-5.6 = <real codex model string>
-5.5 = <real codex model string>
+5.6    = codex gpt-5.6-sol
+sonnet = claude sonnet
 ```
 
 ## Use
@@ -71,6 +72,7 @@ dispatch pr 41                # push branch + open PR closing the issue (after y
 - [Architecture](docs/architecture.md) - worktrees, worker processes, state files, and PR gate
 - [Limitations](docs/limitations.md) - current boundaries and missing commands
 - [Codex events](docs/codex-events.md) - observed `codex exec --json` event vocabulary
+- [Claude events](docs/claude-events.md) - observed Claude stream-JSON event vocabulary
 
 ## Design notes / limits
 
@@ -79,7 +81,6 @@ dispatch pr 41                # push branch + open PR closing the issue (after y
 - **Model strings drift** — that's why they're aliases in `models.conf`, resolved at runtime, never
   hardcoded. Re-run `dispatch doctor` after Codex upgrades.
 - **`--full-auto` is deprecated** in current Codex; this uses the explicit `--sandbox workspace-write`.
-- Cross-vendor is trivial to add later (a `claude`/`gemini` worker backend) — the job ledger doesn't care
-  what ran. Not built yet; add when you actually need it.
+- Codex and Claude workers are supported; Gemini currently has an unverified runner stub.
 - Next sturdiness step: workers report status through `cowork-bridge` instead of the foreman polling
   files. Same UX, better plumbing.
