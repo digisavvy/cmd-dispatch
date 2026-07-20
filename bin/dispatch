@@ -8,6 +8,7 @@
 # Subcommands:
 #   dispatch doctor                       Check deps, list real Codex model strings, validate aliases
 #   dispatch models                       List model aliases -> real slugs + descriptions
+#   dispatch usage [--json]               Show provider subscription usage and reset windows
 #   dispatch start <issue#> <model> [-R repo]   Spawn a worker on an issue
 #   dispatch status [issue#]              Show all jobs (or one) with live state
 #   dispatch logs <issue#> [-f]           Tail a worker's log
@@ -373,11 +374,96 @@ cmd_models() {
   done
 }
 
+# First configured model for a provider. Usage limits are subscription-wide, not per alias/model;
+# the model is included only to make the provider row recognizable.
+usage_model() {
+  local wanted="$1" value provider slug
+  [[ -f "$MODELS_CONF" ]] || return
+  while IFS= read -r line; do
+    value="$(printf '%s' "$line" | sed 's/^[^=]*=//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+    provider="${value%%[[:space:]]*}"
+    [[ "$provider" == "$wanted" ]] || continue
+    slug="${value#"$provider"}"; slug="${slug#${slug%%[![:space:]]*}}"
+    printf '%s\n' "$slug"
+    return
+  done < <(grep -E '^[[:space:]]*[^#].*=' "$MODELS_CONF")
+}
+
+human_duration() {
+  local seconds="$1" days hours mins
+  (( seconds < 0 )) && seconds=0
+  days=$((seconds / 86400)); hours=$(((seconds % 86400) / 3600)); mins=$(((seconds % 3600) / 60))
+  if (( days > 0 )); then printf '%dd %dh' "$days" "$hours"
+  elif (( hours > 0 )); then printf '%dh %dm' "$hours" "$mins"
+  else printf '%dm' "$mins"
+  fi
+}
+
+# Emit normalized JSON records. Codex writes the latest server-provided rate-limit snapshot into
+# session JSONL token_count events. Claude Code 2.1.170 exposes no equivalent CLI command or local
+# subscription-window fields, so it deliberately emits an unavailable record.
+usage_records() {
+  local provider model sessions latest snapshot window
+  for provider in codex claude gemini; do
+    model="$(usage_model "$provider")"
+    [[ -n "$model" ]] || continue
+    if [[ "$provider" == "codex" && -n "$(command -v jq 2>/dev/null)" ]]; then
+      sessions="${DISPATCH_CODEX_SESSIONS_DIR:-$HOME/.codex/sessions}"
+      latest="$(find "$sessions" -type f -name '*.jsonl' -print 2>/dev/null | while IFS= read -r f; do
+        printf '%s\t%s\n' "$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)" "$f"
+      done | sort -rn | head -1 | cut -f2-)"
+      snapshot=""
+      [[ -n "$latest" ]] && snapshot="$(jq -c 'select(.type=="event_msg" and .payload.type=="token_count" and .payload.rate_limits) | .payload.rate_limits' "$latest" 2>/dev/null | tail -1)"
+      if [[ -n "$snapshot" ]]; then
+        for window in primary secondary; do
+          printf '%s\n' "$snapshot" | jq -c --arg p "$provider" --arg m "$model" --arg w "$window" '
+            .[$w] | select(. != null and .used_percent != null) |
+            {provider:$p, model:$m, window:$w, used_percent:.used_percent,
+             window_minutes:.window_minutes, resets_at:.resets_at, available:true}'
+        done
+        continue
+      fi
+    fi
+    jq -nc --arg p "$provider" --arg m "$model" \
+      '{provider:$p, model:$m, window:null, used_percent:null, window_minutes:null, resets_at:null, available:false}'
+  done
+}
+
+cmd_usage() {
+  local json=0 records provider model window percent reset now_epoch filled empty bar label
+  [[ "${1:-}" == "--json" ]] && { json=1; shift; }
+  [[ $# == 0 ]] || die "usage: dispatch usage [--json]"
+  need jq
+  records="$(usage_records)"
+  if [[ "$json" == 1 ]]; then
+    printf '%s\n' "$records" | jq -s .
+    return
+  fi
+  now_epoch="$(date +%s)"
+  while IFS=$'\t' read -r provider model window percent reset; do
+    if [[ "$percent" == "n/a" ]]; then
+      printf "%-7s %-18s [%-20s]  n/a   resets n/a\n" "$provider" "$model" ""
+      continue
+    fi
+    # Round to the nearest bar cell while preserving the server's percentage in the label.
+    filled="$(awk -v p="$percent" 'BEGIN { n=int((p*20/100)+0.5); if(n<0)n=0; if(n>20)n=20; print n }')"
+    empty=$((20 - filled)); bar=""
+    while (( filled-- > 0 )); do bar+="█"; done
+    while (( empty-- > 0 )); do bar+="░"; done
+    label="$window"
+    printf "%-7s %-18s [%s] %5s%%  %-9s resets %s\n" "$provider" "$model" "$bar" "$percent" "$label" "$(human_duration "$((reset - now_epoch))")"
+  done < <(printf '%s\n' "$records" | jq -r '[.provider,.model,
+    (if .available then (if .window_minutes==300 then "5h" elif .window_minutes==10080 then "weekly" else ((.window_minutes|tostring)+"m") end) else "n/a" end),
+    (if .available then (.used_percent|tostring) else "n/a" end),
+    (if .available then (.resets_at|tostring) else "0" end)] | @tsv')
+}
+
 main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
     doctor) cmd_doctor "$@" ;;
     models) cmd_models "$@" ;;
+    usage)  cmd_usage "$@" ;;
     start)  cmd_start "$@" ;;
     status) cmd_status "$@" ;;
     logs)   cmd_logs "$@" ;;

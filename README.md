@@ -60,6 +60,7 @@ Or drive the CLI directly:
 ```sh
 dispatch start 41 5.6         # spawn a worker
 dispatch status               # RUNNING / DONE / FAILED / KILLED + last event / final message
+dispatch usage                # subscription usage bars and reset windows
 dispatch logs 41 -f           # tail live output
 dispatch stop 52              # kill a worker (keeps the worktree)
 dispatch clean 52             # remove worktree + branch + job state (to reassign)
