@@ -1,6 +1,6 @@
 # Architecture
 
-`cmd-dispatch` is intentionally file-based. The CLI creates one isolated Git worktree per GitHub issue, starts one headless Codex worker inside that worktree, and records enough state under `.dispatch/` for the foreman to check progress later.
+`cmd-dispatch` is intentionally file-based. The CLI creates one isolated Git worktree per GitHub issue, starts one headless Codex or Claude worker inside that worktree, and records enough state under `.dispatch/` for the foreman to check progress later.
 
 ## Worktree Isolation
 
@@ -24,6 +24,8 @@ codex exec -C "$worktree" -m "$model" --sandbox workspace-write --add-dir "$gitc
 
 The `--add-dir` path points at the repository's Git common directory so the worker can commit from a linked worktree while running in the workspace-write sandbox.
 
+Claude runs with the worktree as cwd, stream JSON, `--add-dir "$gitcommon"`, and `--dangerously-skip-permissions`; the isolated worktree and foreman review provide the same trust boundary. Gemini has an unverified runner template only.
+
 The shell pid from the background `nohup bash "$jobdir/run.sh"` process is written to `pid`. When `codex exec` exits, `run.sh` writes the exit code to `exitcode`.
 
 ## Event Streams
@@ -34,7 +36,7 @@ The shell pid from the background `nohup bash "$jobdir/run.sh"` process is writt
 - `worker.log` is stderr for `dispatch logs`
 - `last_message.txt` is written by `codex exec -o` and used by `dispatch status` after a worker finishes
 
-`dispatch status` parses the latest JSON object in `events.jsonl` with `jq` when available. It summarizes agent messages, command executions, file changes, and turn completion. See [codex-events.md](codex-events.md) for the event vocabulary currently documented for this project.
+`dispatch status` reads the provider from `meta`, then parses the latest JSON object with `jq`. Codex keeps its `item.*` summaries; Claude summarizes assistant text, tool use, and result records. Gemini and unknown providers fall back to the last raw line. See [codex-events.md](codex-events.md) and [claude-events.md](claude-events.md).
 
 ## State Layout
 
@@ -60,6 +62,7 @@ State lives in the target repository:
 ```text
 issue=<n>
 alias=<requested alias>
+provider=<codex|claude|gemini>
 model=<resolved model>
 branch=dispatch/issue-<n>
 worktree=<absolute worktree path>

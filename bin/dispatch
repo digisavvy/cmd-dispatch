@@ -38,14 +38,31 @@ repo_root() {
     || die "not inside a git repo. Run from the target repo (the one with the issues), or pass -R <path>."
 }
 
-# Map an alias to a real Codex model string via models.conf; pass through if no match.
+# Print "provider model" for an alias, or infer the provider from a raw model slug.
 resolve_model() {
-  local key="$1" val=""
+  local key="$1" val="" provider model
   if [[ -f "$MODELS_CONF" ]]; then
-    val="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$MODELS_CONF" 2>/dev/null \
-      | grep -v '^[[:space:]]*#' | head -1 | sed 's/^[^=]*=//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+    val="$(awk -F= -v key="$key" '
+      /^[[:space:]]*#/ { next }
+      NF >= 2 { alias=$1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", alias)
+        if (alias == key) { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]*$/, ""); print; exit } }
+      ' "$MODELS_CONF")"
   fi
-  [[ -n "$val" ]] && echo "$val" || echo "$key"
+  if [[ -n "$val" ]]; then
+    provider="${val%%[[:space:]]*}"
+    model="${val#"$provider"}"; model="${model#${model%%[![:space:]]*}}"
+    [[ "$provider" =~ ^(codex|claude|gemini)$ && -n "$model" ]] \
+      || die "invalid model alias '$key': expected '<provider> <model>' in $MODELS_CONF"
+    printf '%s %s\n' "$provider" "$model"
+    return
+  fi
+  case "$key" in
+    gpt-*|codex-*) provider="codex" ;;
+    claude-*) provider="claude" ;;
+    gemini-*) provider="gemini" ;;
+    *) die "model alias '$key' not found and provider cannot be inferred; add it to $MODELS_CONF as '<alias> = <provider> <model>'" ;;
+  esac
+  printf '%s %s\n' "$provider" "$key"
 }
 
 meta_get() { # meta_get <jobdir> <key>
@@ -68,12 +85,14 @@ job_state() {
 #   thread.started | turn.started | item.started | item.completed | turn.completed
 #   item.type ∈ { agent_message(.text) | file_change(.changes[]) | command_execution(.command,.exit_code) }
 last_event() {
-  local f="$1" line
+  local jd="$1" f="$1/events.jsonl" provider line
+  provider="$(meta_get "$jd" provider)"; provider="${provider:-codex}"
   line="$(grep -E '^\s*\{' "$f" 2>/dev/null | tail -1)"
   [[ -z "$line" ]] && line="$(tail -1 "$f" 2>/dev/null || true)"
   [[ -z "$line" ]] && return
   if command -v jq >/dev/null 2>&1 && printf '%s\n' "$line" | jq -e . >/dev/null 2>&1; then
-    printf '%s\n' "$line" | jq -r '
+    if [[ "$provider" == "codex" ]]; then
+      printf '%s\n' "$line" | jq -r '
       if (.type | test("^item")) then
         (.item.type) as $it |
         if   $it=="agent_message"     then "msg: "  + (((.item.text//"")|gsub("\\s+";" "))[0:120])
@@ -83,6 +102,15 @@ last_event() {
       elif .type=="turn.completed" then "turn done (\(.usage.output_tokens // "?") out tok)"
       elif .type=="thread.started" then "started"
       else .type end' 2>/dev/null || echo "${line:0:140}"
+    elif [[ "$provider" == "claude" ]]; then
+      printf '%s\n' "$line" | jq -r '
+        if .type=="assistant" then
+          ([.message.content[]? | if .type=="text" then "msg: " + ((.text//""|gsub("\\s+";" "))[0:120]) elif .type=="tool_use" then "tool: " + (.name//"unknown") else empty end] | join(", "))
+        elif .type=="result" then "result: " + ((.result//.text//""|gsub("\\s+";" "))[0:120])
+        elif .type=="system" then "started" else .type end' 2>/dev/null || echo "${line:0:140}"
+    else
+      echo "${line:0:140}"
+    fi
   else
     echo "${line:0:140}"
   fi
@@ -95,12 +123,17 @@ cmd_doctor() {
   for t in git gh jq; do
     if command -v "$t" >/dev/null 2>&1; then echo "  ok   $t ($($t --version 2>/dev/null | head -1))"; else echo "  MISS $t"; ok=0; fi
   done
-  if command -v codex >/dev/null 2>&1; then
-    echo "  ok   codex ($(codex --version 2>/dev/null | head -1))"
-  else
-    echo "  MISS codex  ->  npm i -g @openai/codex   then:  codex login   (use your subscription)"
-    ok=0
-  fi
+  echo
+  echo "Providers:"
+  local provider path version
+  for provider in codex claude gemini; do
+    if path="$(command -v "$provider" 2>/dev/null)"; then
+      version="$($provider --version 2>/dev/null | head -1)"
+      echo "  installed  $provider  $path${version:+ ($version)}"
+    else
+      echo "  MISSING    $provider"
+    fi
+  done
   echo
   echo "Codex model strings (source of truth for models.conf):"
   if command -v codex >/dev/null 2>&1; then
@@ -132,15 +165,16 @@ cmd_start() {
   done
   [[ -n "$n" && -n "$alias" ]] || die "usage: dispatch start <issue#> <model> [-R repo]"
   [[ "$n" =~ ^[0-9]+$ ]] || die "issue# must be a number, got '$n'"
-  need codex "run: dispatch doctor"
   need gh; need git; need jq
 
-  local root sd jd model branch wt issue_json title body gitcommon
+  local root sd jd provider model resolved branch wt issue_json title body gitcommon
   root="$(repo_root "$repo")"
   sd="$root/.dispatch"; jd="$sd/jobs/$n"
   [[ -e "$jd" ]] && die "job for issue #$n already exists. (dispatch status $n | dispatch stop $n | dispatch clean $n)"
 
-  model="$(resolve_model "$alias")"
+  resolved="$(resolve_model "$alias")"
+  read -r provider model <<< "$resolved"
+  command -v "$provider" >/dev/null 2>&1 || die "$provider not installed"
   branch="dispatch/issue-$n"
   wt="$(cd "$root/.." && pwd)/$(basename "$root")-wt-issue-$n"
 
@@ -177,7 +211,8 @@ EOF
 
   # Per-job runner avoids nested-quote hell and captures the exit code.
   # -C targets the worktree; -o writes the worker's final message for clean status reporting.
-  cat > "$jd/run.sh" <<EOF
+  case "$provider" in
+  codex) cat > "$jd/run.sh" <<EOF
 #!/usr/bin/env bash
 # Keep stdout (--json JSONL events) and stderr (human progress) in separate files so a TUI/
 # status can parse clean events while 'dispatch logs' shows readable progress.
@@ -186,11 +221,35 @@ codex exec -C "$wt" -m "$model" --sandbox workspace-write --add-dir "$gitcommon"
   > "$jd/events.jsonl" 2> "$jd/worker.log"
 echo \$? > "$jd/exitcode"
 EOF
+    ;;
+  claude) cat > "$jd/run.sh" <<EOF
+#!/usr/bin/env bash
+# This throwaway worktree is reviewed before merge, matching Codex workspace-write's trust model.
+( cd "$wt" && claude -p "\$(cat "$jd/prompt.txt")" --model "$model" \\
+    --output-format stream-json --verbose --add-dir "$gitcommon" --dangerously-skip-permissions ) \\
+  > "$jd/events.jsonl" 2> "$jd/worker.log"
+worker_ec=\$?
+jq -r 'select(.type=="result") | .result // .text // empty' "$jd/events.jsonl" | tail -1 > "$jd/last_message.txt"
+echo \$worker_ec > "$jd/exitcode"
+EOF
+    ;;
+  gemini) cat > "$jd/run.sh" <<EOF
+#!/usr/bin/env bash
+# UNVERIFIED: Gemini CLI was unavailable during development; command flags and events may differ.
+( cd "$wt" && gemini -p "\$(cat "$jd/prompt.txt")" --model "$model" --output-format stream-json ) \\
+  > "$jd/events.jsonl" 2> "$jd/worker.log"
+worker_ec=\$?
+tail -1 "$jd/events.jsonl" > "$jd/last_message.txt"
+echo \$worker_ec > "$jd/exitcode"
+EOF
+    ;;
+  esac
   chmod +x "$jd/run.sh"
 
   cat > "$jd/meta" <<EOF
 issue=$n
 alias=$alias
+provider=$provider
 model=$model
 branch=$branch
 worktree=$wt
@@ -200,9 +259,9 @@ EOF
   # run.sh owns worker.log (stderr) and events.jsonl (stdout); wrapper noise is discarded.
   nohup bash "$jd/run.sh" >/dev/null 2>&1 &
   echo $! > "$jd/pid"
-  echo "$(now) start issue=$n alias=$alias model=$model pid=$(cat "$jd/pid")" >> "$sd/ledger.log"
+  echo "$(now) start issue=$n alias=$alias provider=$provider model=$model pid=$(cat "$jd/pid")" >> "$sd/ledger.log"
 
-  echo "started #$n  ->  model=$model (alias $alias)  branch=$branch  pid=$(cat "$jd/pid")"
+  echo "started #$n  ->  provider=$provider model=$model (alias $alias)  branch=$branch  pid=$(cat "$jd/pid")"
   echo "worktree: $wt"
   echo "watch:    dispatch status $n   |   dispatch logs $n -f"
 }
@@ -216,7 +275,7 @@ print_job_row() { # print_job_row <jobdir>
   if [[ "$st" != "RUNNING" && -s "$jd/last_message.txt" ]]; then
     ev="final: $(tr '\n' ' ' < "$jd/last_message.txt" | cut -c1-160)"
   else
-    ev="$(last_event "$jd/events.jsonl")"
+    ev="$(last_event "$jd")"
   fi
   [[ -n "$ev" ]] && printf "         └─ %s\n" "$ev"
 }
@@ -295,20 +354,22 @@ cmd_clean() {
   echo "cleaned #$n (worktree, branch, and job state removed)."
 }
 
-# List model aliases with their resolved slug and (if available) the Codex description.
+# List model aliases with provider, resolved slug, and (for Codex) cached description.
 # The /dispatch picker builds its menu from this, so options never drift from models.conf.
 cmd_models() {
   [[ -f "$MODELS_CONF" ]] || die "no models.conf at $MODELS_CONF (copy models.conf.example)"
-  local cache="$HOME/.codex/models_cache.json" alias slug desc
-  printf "%-10s %-16s %s\n" "ALIAS" "MODEL" "DESCRIPTION"
+  local cache="$HOME/.codex/models_cache.json" alias provider value slug desc
+  printf "%-10s %-10s %-22s %s\n" "ALIAS" "PROVIDER" "MODEL" "DESCRIPTION"
   grep -E '^[[:space:]]*[^#].*=' "$MODELS_CONF" | while IFS= read -r line; do
     alias="$(printf '%s' "$line" | sed 's/=.*//; s/[[:space:]]//g')"
-    slug="$(printf '%s' "$line" | sed 's/^[^=]*=//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+    value="$(printf '%s' "$line" | sed 's/^[^=]*=//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+    provider="${value%%[[:space:]]*}"
+    slug="${value#"$provider"}"; slug="${slug#${slug%%[![:space:]]*}}"
     desc=""
-    if [[ -f "$cache" ]] && command -v jq >/dev/null 2>&1; then
+    if [[ "$provider" == "codex" && -f "$cache" ]] && command -v jq >/dev/null 2>&1; then
       desc="$(jq -r --arg s "$slug" '.models[]? | select(.slug==$s) | .description // ""' "$cache" 2>/dev/null | head -1)"
     fi
-    printf "%-10s %-16s %s\n" "$alias" "$slug" "$desc"
+    printf "%-10s %-10s %-22s %s\n" "$alias" "$provider" "$slug" "$desc"
   done
 }
 
