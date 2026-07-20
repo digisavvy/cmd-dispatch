@@ -1,0 +1,8 @@
+# Machine-local model alias overrides (install.sh seeds this from models.conf.example)
+models.conf
+
+# Per-repo dispatch state (normally created inside target repos, not here)
+.dispatch/
+
+# macOS
+.DS_Store

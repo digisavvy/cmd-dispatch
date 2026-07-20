@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+# dispatch — a thin conversational foreman for spawning Codex workers per GitHub issue.
+#
+# The lead agent (Claude Code / Fable) parses your natural-language assignments and calls
+# these subcommands. Each worker runs `codex exec` headless in its own git worktree/branch.
+# State lives in <target-repo>/.dispatch/ so "who's on what" survives crashes and new sessions.
+#
+# Subcommands:
+#   dispatch doctor                       Check deps, list real Codex model strings, validate aliases
+#   dispatch start <issue#> <model> [-R repo]   Spawn a worker on an issue
+#   dispatch status [issue#]              Show all jobs (or one) with live state
+#   dispatch logs <issue#> [-f]           Tail a worker's log
+#   dispatch stop <issue#>                Kill a running worker (keeps the worktree)
+#   dispatch pr <issue#>                  Push the branch and open a PR (lead reviews first)
+#   dispatch clean <issue#>               Remove the worktree + branch + job state
+#
+# <model> may be an alias from models.conf (e.g. 5.6) or a raw Codex model string.
+set -euo pipefail
+
+VERSION="0.1.0"
+# Resolve through symlinks so models.conf is found when invoked via ~/.local/bin/dispatch.
+_src="${BASH_SOURCE[0]}"
+while [ -h "$_src" ]; do
+  _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+  _src="$(readlink "$_src")"; [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+SELF_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
+MODELS_CONF="${DISPATCH_MODELS_CONF:-$SELF_DIR/../models.conf}"
+
+die() { echo "dispatch: $*" >&2; exit 1; }
+now() { date -u +%FT%TZ; }
+
+need() { command -v "$1" >/dev/null 2>&1 || die "'$1' not found on PATH${2:+ — $2}"; }
+
+repo_root() {
+  git -C "${1:-.}" rev-parse --show-toplevel 2>/dev/null \
+    || die "not inside a git repo. Run from the target repo (the one with the issues), or pass -R <path>."
+}
+
+# Map an alias to a real Codex model string via models.conf; pass through if no match.
+resolve_model() {
+  local key="$1" val=""
+  if [[ -f "$MODELS_CONF" ]]; then
+    val="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$MODELS_CONF" 2>/dev/null \
+      | grep -v '^[[:space:]]*#' | head -1 | sed 's/^[^=]*=//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+  fi
+  [[ -n "$val" ]] && echo "$val" || echo "$key"
+}
+
+meta_get() { # meta_get <jobdir> <key>
+  grep -E "^$2=" "$1/meta" 2>/dev/null | head -1 | sed "s/^$2=//"
+}
+
+# RUNNING | DONE | FAILED(code) | KILLED
+job_state() {
+  local jd="$1" pid ec
+  if [[ -f "$jd/exitcode" ]]; then
+    ec="$(cat "$jd/exitcode")"
+    [[ "$ec" == "0" ]] && echo "DONE" || echo "FAILED($ec)"
+    return
+  fi
+  pid="$(cat "$jd/pid" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then echo "RUNNING"; else echo "KILLED"; fi
+}
+
+# Last structured event codex emitted (--json is JSONL); fall back to last log line.
+last_event() {
+  local log="$1" line
+  line="$(grep -E '^\s*\{' "$log" 2>/dev/null | tail -1)"
+  [[ -z "$line" ]] && line="$(tail -1 "$log" 2>/dev/null || true)"
+  if command -v jq >/dev/null 2>&1 && echo "$line" | jq -e . >/dev/null 2>&1; then
+    echo "$line" | jq -r '(.type // .msg.type // "event") + ": " + ((.msg.message // .message // .text // .delta // "") | tostring[0:120])' 2>/dev/null || echo "$line"
+  else
+    echo "${line:0:140}"
+  fi
+}
+
+cmd_doctor() {
+  local ok=1
+  echo "dispatch $VERSION — doctor"
+  echo
+  for t in git gh jq; do
+    if command -v "$t" >/dev/null 2>&1; then echo "  ok   $t ($($t --version 2>/dev/null | head -1))"; else echo "  MISS $t"; ok=0; fi
+  done
+  if command -v codex >/dev/null 2>&1; then
+    echo "  ok   codex ($(codex --version 2>/dev/null | head -1))"
+  else
+    echo "  MISS codex  ->  npm i -g @openai/codex   then:  codex login   (use your subscription)"
+    ok=0
+  fi
+  echo
+  echo "Codex model strings (source of truth for models.conf):"
+  if command -v codex >/dev/null 2>&1; then
+    # These vary by version; try the documented surfaces and show whatever exists.
+    codex exec --help 2>/dev/null | grep -iA2 -- '-m,\|--model' | sed 's/^/    /' || true
+    echo "    (also try:  codex --help  |  codex models  — fill real strings into $MODELS_CONF)"
+  else
+    echo "    (install codex first, then re-run 'dispatch doctor')"
+  fi
+  echo
+  echo "models.conf aliases  ($MODELS_CONF):"
+  if [[ -f "$MODELS_CONF" ]]; then
+    grep -E '^[[:space:]]*[^#].*=' "$MODELS_CONF" | while IFS= read -r l; do echo "    $l"; done
+  else
+    echo "    MISSING — copy models.conf.example -> models.conf"; ok=0
+  fi
+  echo
+  [[ "$ok" == 1 ]] && echo "Ready." || echo "Not ready — resolve the MISS/MISSING items above."
+  [[ "$ok" == 1 ]]
+}
+
+cmd_start() {
+  local n="" alias="" repo="."
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -R|--repo) repo="$2"; shift 2 ;;
+      *) if [[ -z "$n" ]]; then n="$1"; elif [[ -z "$alias" ]]; then alias="$1"; fi; shift ;;
+    esac
+  done
+  [[ -n "$n" && -n "$alias" ]] || die "usage: dispatch start <issue#> <model> [-R repo]"
+  [[ "$n" =~ ^[0-9]+$ ]] || die "issue# must be a number, got '$n'"
+  need codex "run: dispatch doctor"
+  need gh; need git; need jq
+
+  local root sd jd model branch wt issue_json title body
+  root="$(repo_root "$repo")"
+  sd="$root/.dispatch"; jd="$sd/jobs/$n"
+  [[ -e "$jd" ]] && die "job for issue #$n already exists. (dispatch status $n | dispatch stop $n | dispatch clean $n)"
+
+  model="$(resolve_model "$alias")"
+  branch="dispatch/issue-$n"
+  wt="$root/../$(basename "$root")-wt-issue-$n"
+
+  issue_json="$(cd "$root" && gh issue view "$n" --json number,title,body 2>/dev/null)" \
+    || die "could not fetch issue #$n via gh (wrong repo, or not authed?)"
+  title="$(echo "$issue_json" | jq -r '.title')"
+  body="$(echo "$issue_json" | jq -r '.body // ""')"
+
+  mkdir -p "$jd/jobs" 2>/dev/null || true
+  mkdir -p "$jd"
+
+  cat > "$jd/prompt.txt" <<EOF
+You are an autonomous coding worker. Implement GitHub issue #$n on the current git branch ($branch).
+
+TITLE: $title
+
+DESCRIPTION:
+$body
+
+RULES:
+- Work only on the current branch ($branch). Never switch or create branches.
+- Keep the change minimal and scoped strictly to this issue. No "while I'm here" edits.
+- If the repo has tests or a build, run them and make sure they pass before finishing.
+- Commit your work with a clear message that references #$n. Do NOT push and do NOT open a PR — the lead reviews and merges.
+- If the issue is ambiguous or you get blocked, stop and explain the blocker in your final message rather than guessing.
+EOF
+
+  git -C "$root" worktree add -b "$branch" "$wt" >/dev/null 2>&1 \
+    || die "worktree add failed (branch '$branch' may already exist; try: dispatch clean $n)"
+
+  # Per-job runner avoids nested-quote hell and captures the exit code.
+  # -C targets the worktree; -o writes the worker's final message for clean status reporting.
+  cat > "$jd/run.sh" <<EOF
+#!/usr/bin/env bash
+codex exec -C "$wt" -m "$model" --sandbox workspace-write --json \\
+  -o "$jd/last_message.txt" "\$(cat "$jd/prompt.txt")"
+echo \$? > "$jd/exitcode"
+EOF
+  chmod +x "$jd/run.sh"
+
+  cat > "$jd/meta" <<EOF
+issue=$n
+alias=$alias
+model=$model
+branch=$branch
+worktree=$wt
+started_at=$(now)
+EOF
+
+  nohup bash "$jd/run.sh" > "$jd/worker.log" 2>&1 &
+  echo $! > "$jd/pid"
+  echo "$(now) start issue=$n alias=$alias model=$model pid=$(cat "$jd/pid")" >> "$sd/ledger.log"
+
+  echo "started #$n  ->  model=$model (alias $alias)  branch=$branch  pid=$(cat "$jd/pid")"
+  echo "worktree: $wt"
+  echo "watch:    dispatch status $n   |   dispatch logs $n -f"
+}
+
+print_job_row() { # print_job_row <jobdir>
+  local jd="$1" n st
+  n="$(basename "$jd")"
+  st="$(job_state "$jd")"
+  printf "  #%-5s %-11s %-22s %s\n" "$n" "$st" "$(meta_get "$jd" model)" "$(meta_get "$jd" branch)"
+  local ev
+  if [[ "$st" != "RUNNING" && -s "$jd/last_message.txt" ]]; then
+    ev="final: $(tr '\n' ' ' < "$jd/last_message.txt" | cut -c1-160)"
+  else
+    ev="$(last_event "$jd/worker.log")"
+  fi
+  [[ -n "$ev" ]] && printf "         └─ %s\n" "$ev"
+}
+
+cmd_status() {
+  local n="${1:-}" repo="." root sd
+  [[ "$n" == "-R" ]] && { repo="$2"; n=""; }
+  root="$(repo_root "$repo")"; sd="$root/.dispatch"
+  [[ -d "$sd/jobs" ]] || { echo "no dispatched jobs in $(basename "$root")."; return; }
+  if [[ -n "$n" ]]; then
+    [[ -d "$sd/jobs/$n" ]] || die "no job for issue #$n"
+    print_job_row "$sd/jobs/$n"
+    echo "  worktree: $(meta_get "$sd/jobs/$n" worktree)"
+    return
+  fi
+  echo "dispatched jobs in $(basename "$root"):"
+  local found=0
+  for jd in "$sd"/jobs/*/; do
+    [[ -d "$jd" ]] || continue; found=1
+    print_job_row "$jd"
+  done
+  [[ "$found" == 1 ]] || echo "  (none)"
+}
+
+cmd_logs() {
+  local n="${1:-}"; shift || true
+  [[ -n "$n" ]] || die "usage: dispatch logs <issue#> [-f]"
+  local root; root="$(repo_root .)"
+  local log="$root/.dispatch/jobs/$n/worker.log"
+  [[ -f "$log" ]] || die "no log for issue #$n"
+  if [[ "${1:-}" == "-f" ]]; then tail -f "$log"; else tail -40 "$log"; fi
+}
+
+cmd_stop() {
+  local n="${1:-}"; [[ -n "$n" ]] || die "usage: dispatch stop <issue#>"
+  local root jd pid; root="$(repo_root .)"; jd="$root/.dispatch/jobs/$n"
+  [[ -d "$jd" ]] || die "no job for issue #$n"
+  pid="$(cat "$jd/pid" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true; sleep 1; kill -9 "$pid" 2>/dev/null || true
+    echo "killed" > "$jd/exitcode"
+    echo "$(now) stop issue=$n pid=$pid" >> "$root/.dispatch/ledger.log"
+    echo "stopped #$n (worktree kept: $(meta_get "$jd" worktree)). Reassign with: dispatch clean $n && dispatch start $n <model>"
+  else
+    echo "#$n is not running (state: $(job_state "$jd"))."
+  fi
+}
+
+cmd_pr() {
+  local n="${1:-}"; [[ -n "$n" ]] || die "usage: dispatch pr <issue#>"
+  local root jd wt branch; root="$(repo_root .)"; jd="$root/.dispatch/jobs/$n"
+  [[ -d "$jd" ]] || die "no job for issue #$n"
+  wt="$(meta_get "$jd" worktree)"; branch="$(meta_get "$jd" branch)"
+  [[ -n "$(git -C "$wt" status --porcelain)" ]] && die "worktree has uncommitted changes — worker didn't finish cleanly. Inspect: $wt"
+  git -C "$wt" rev-parse --verify "$branch" >/dev/null 2>&1 || die "branch $branch missing"
+  ( cd "$wt" && git push -u origin "$branch" && gh pr create --fill --head "$branch" --body "Closes #$n
+
+Dispatched worker (model $(meta_get "$jd" model)). Reviewed by lead before open." )
+  echo "$(now) pr issue=$n branch=$branch" >> "$root/.dispatch/ledger.log"
+}
+
+cmd_clean() {
+  local n="${1:-}"; [[ -n "$n" ]] || die "usage: dispatch clean <issue#>"
+  local root jd wt branch; root="$(repo_root .)"; jd="$root/.dispatch/jobs/$n"
+  [[ -d "$jd" ]] || die "no job for issue #$n"
+  wt="$(meta_get "$jd" worktree)"; branch="$(meta_get "$jd" branch)"
+  local pid; pid="$(cat "$jd/pid" 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+  [[ -n "$wt" && -d "$wt" ]] && git -C "$root" worktree remove --force "$wt" 2>/dev/null || true
+  [[ -n "$branch" ]] && git -C "$root" branch -D "$branch" 2>/dev/null || true
+  rm -rf "$jd"
+  echo "cleaned #$n (worktree, branch, and job state removed)."
+}
+
+main() {
+  local cmd="${1:-}"; shift || true
+  case "$cmd" in
+    doctor) cmd_doctor "$@" ;;
+    start)  cmd_start "$@" ;;
+    status) cmd_status "$@" ;;
+    logs)   cmd_logs "$@" ;;
+    stop)   cmd_stop "$@" ;;
+    pr)     cmd_pr "$@" ;;
+    clean)  cmd_clean "$@" ;;
+    version|--version|-v) echo "dispatch $VERSION" ;;
+    ""|help|-h|--help)
+      sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+    *) die "unknown command '$cmd' (try: dispatch help)" ;;
+  esac
+}
+main "$@"

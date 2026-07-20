@@ -1,0 +1,24 @@
+# models.conf — map friendly aliases to real Codex `-m` model strings.
+# Copy to models.conf and adjust. install.sh does this automatically if models.conf is absent.
+# Format:  <alias> = <exact codex model string>
+# Unmatched aliases pass through literally. Re-verify after Codex upgrades:  dispatch doctor
+#
+# Real slugs (codex-cli 0.144.6, from ~/.codex/models_cache.json):
+#   gpt-5.6-sol    frontier agentic coding (most capable)
+#   gpt-5.6-terra  balanced, everyday work
+#   gpt-5.6-luna   fast + affordable
+#   gpt-5.5        frontier for complex coding/research
+#   gpt-5.4        strong everyday
+#   gpt-5.4-mini   small, fast, cheap
+
+# Shorthands
+5.6       = gpt-5.6-sol
+5.5       = gpt-5.5
+5.4       = gpt-5.4
+mini      = gpt-5.4-mini
+default   = gpt-5.6-terra
+
+# Explicit 5.6 variants (override the bare "5.6" default when you want)
+5.6-sol   = gpt-5.6-sol
+5.6-terra = gpt-5.6-terra
+5.6-luna  = gpt-5.6-luna
