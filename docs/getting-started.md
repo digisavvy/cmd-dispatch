@@ -35,13 +35,15 @@ Or hand the foreman plain English and let it do the mechanics:
 /dispatch put 5.6 on #41, sonnet on #42
 ```
 
-Not sure which model? Give it just the issues and the foreman shows a picker:
+Don't want to remember aliases? Use **`/pick`** — it shows a short plain-English menu
+(Codex / Claude × Best / Balanced / Fast) and dispatches your choice:
 
 ```
-/dispatch #41 #42
+/pick #41 #42
 ```
 
-Run `dispatch models` anytime to see the aliases and what they map to.
+(`/dispatch #41 #42` with no model does the same thing inline. Run `dispatch models` anytime to see
+every alias and what it maps to.)
 
 ## Watch it work
 

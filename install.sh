@@ -8,14 +8,15 @@ CMD_DIR="${DISPATCH_CMD_DIR:-$HOME/.claude/commands}"
 
 mkdir -p "$BIN_DIR" "$CMD_DIR"
 ln -sf "$SRC/bin/dispatch" "$BIN_DIR/dispatch"
-ln -sf "$SRC/commands/dispatch.md" "$CMD_DIR/dispatch.md"
+# Symlink every slash command (dispatch, pick, …)
+for cmd in "$SRC"/commands/*.md; do ln -sf "$cmd" "$CMD_DIR/$(basename "$cmd")"; done
 
 # models.conf: copy (don't symlink) so edits don't collide with git updates, unless it exists.
 if [[ ! -f "$SRC/models.conf" ]]; then cp "$SRC/models.conf.example" "$SRC/models.conf" 2>/dev/null || true; fi
 
 echo "installed:"
 echo "  CLI:     $BIN_DIR/dispatch  ->  $SRC/bin/dispatch"
-echo "  command: $CMD_DIR/dispatch.md  (use /dispatch in Claude Code)"
+echo "  commands: $CMD_DIR/{dispatch,pick}.md  (use /dispatch and /pick in Claude Code)"
 echo
 case ":$PATH:" in
   *":$BIN_DIR:"*) : ;;
