@@ -11,21 +11,23 @@ short, curated menu and dispatch the chosen model. This is a friendlier front do
 Parse issue number(s) from the user's message (`/pick #41 #42`, "pick a model for 41 and 57"). If none
 are given, ask which issue(s) to dispatch — don't guess.
 
-## 2. Show the curated menu (AskUserQuestion)
+## 2. Pick the model — two-step menu
 
-Present exactly these six options — human labels, not slugs. Each maps to a `models.conf` alias:
+The AskUserQuestion picker caps at **4 options per question**, so ask **provider then tier** (send both
+as two questions in a single AskUserQuestion call — the user answers them on one screen):
 
-| Menu label | alias | what it is |
-|---|---|---|
-| **Codex — Best** | `5.6` | frontier coding (gpt-5.6-sol); slowest/priciest |
-| **Codex — Balanced** | `5.6-terra` | everyday work |
-| **Codex — Fast** | `5.6-luna` | fast + affordable |
-| **Claude — Best** | `opus` | frontier Claude |
-| **Claude — Balanced** | `sonnet` | everyday Claude |
-| **Claude — Fast** | `haiku` | fast + cheap Claude |
+- **Provider:** Codex · Claude
+- **Tier:** Best · Balanced · Fast
 
-Use the "what it is" text as each option's detail. If several issues were given, first ask whether to
-apply one model to all of them or pick per issue, then run the menu accordingly.
+Map the two answers to a `models.conf` alias:
+
+| | Best | Balanced | Fast |
+|---|---|---|---|
+| **Codex** | `5.6` (frontier) | `5.6-terra` (everyday) | `5.6-luna` (fast/cheap) |
+| **Claude** | `opus` | `sonnet` | `haiku` |
+
+If several issues were given, first ask whether to apply one model to all of them or pick per issue,
+then run the menu accordingly.
 
 ## 3. Dispatch
 
