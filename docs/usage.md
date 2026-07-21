@@ -60,7 +60,7 @@ dispatch start 41 5.6 -R /path/to/target-repo
 
 Only one job directory may exist per issue. To redo an issue, stop or clean the existing job first.
 
-### `dispatch usage [--json]`
+### `dispatch usage [--json] [--probe|--live]`
 
 Shows each configured provider's subscription usage as a terminal bar, including every limit window
 the provider reports and the time until reset. `--json` emits normalized records for scripts.
@@ -68,6 +68,7 @@ the provider reports and the time until reset. `--json` emits normalized records
 ```sh
 dispatch usage
 dispatch usage --json
+dispatch usage --probe
 ```
 
 Codex usage comes from the newest local `~/.codex/sessions/**/rollout-*.jsonl` session: observed
@@ -76,8 +77,9 @@ snapshots (`used_percent`, `window_minutes`, and `resets_at`). This is the last 
 not a network refresh; running Codex updates it. Set `DISPATCH_CODEX_SESSIONS_DIR` to override that
 location (primarily useful for fixtures).
 
-Claude Code 2.1.170 exposes neither a usage/status subcommand nor subscription-window utilization in
-its persisted stream JSON. Claude therefore displays `n/a` instead of estimating from token totals.
+Claude does not persist subscription-window utilization. By default its row therefore displays
+`n/a`. Pass `--probe` (or `--live`) to spend one Claude API call and show the live five-hour status
+and reset time; Claude does not report a numeric used percentage, so its bar remains `n/a`.
 Providers without observed usage data degrade the same way.
 
 ### `dispatch status [issue#]`
