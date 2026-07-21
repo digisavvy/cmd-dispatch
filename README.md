@@ -69,6 +69,7 @@ dispatch pr 41                # push branch + open PR closing the issue (after y
 
 ## Documentation
 
+- [Getting started](docs/getting-started.md) - a 5-minute walkthrough of using it (start here)
 - [Usage](docs/usage.md) - install, CLI commands, `/dispatch`, and model aliases
 - [Architecture](docs/architecture.md) - worktrees, worker processes, state files, and PR gate
 - [Limitations](docs/limitations.md) - current boundaries and missing commands
