@@ -8,7 +8,7 @@
 # Subcommands:
 #   dispatch doctor                       Check deps, list real Codex model strings, validate aliases
 #   dispatch models                       List model aliases -> real slugs + descriptions
-#   dispatch usage [--json]               Show provider subscription usage and reset windows
+#   dispatch usage [--json] [--probe|--live] Show provider subscription usage and reset windows
 #   dispatch start <issue#> <model> [-R repo]   Spawn a worker on an issue
 #   dispatch status [issue#]              Show all jobs (or one) with live state
 #   dispatch logs <issue#> [-f]           Tail a worker's log
@@ -400,10 +400,9 @@ human_duration() {
 }
 
 # Emit normalized JSON records. Codex writes the latest server-provided rate-limit snapshot into
-# session JSONL token_count events. Claude Code 2.1.170 exposes no equivalent CLI command or local
-# subscription-window fields, so it deliberately emits an unavailable record.
+# session JSONL token_count events. Claude exposes reset/status data through an opt-in live probe.
 usage_records() {
-  local provider model sessions latest snapshot window
+  local probe="${1:-0}" provider model sessions latest snapshot window output event
   for provider in codex claude gemini; do
     model="$(usage_model "$provider")"
     [[ -n "$model" ]] || continue
@@ -424,25 +423,56 @@ usage_records() {
         continue
       fi
     fi
+    if [[ "$provider" == "claude" && "$probe" == "1" && -n "$(command -v claude 2>/dev/null)" ]]; then
+      output=""
+      if output="$(claude -p "ok" --output-format stream-json --verbose < /dev/null 2>/dev/null)"; then
+        event="$(printf '%s\n' "$output" | jq -c '
+          (.rate_limit_event.rate_limit_info //
+           (if .type == "rate_limit_event" then .rate_limit_info else empty end)) |
+          select(. != null and .rateLimitType == "five_hour" and .resetsAt != null) |
+          {status:(.status // null), resetsAt:.resetsAt}' 2>/dev/null | tail -1)"
+        if [[ -n "$event" ]]; then
+          printf '%s\n' "$event" | jq -c --arg p "$provider" --arg m "$model" '
+            def epoch:
+              if type == "number" then .
+              else (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null)
+              end;
+            {provider:$p, model:$m, window:"5h", used_percent:null,
+             window_minutes:300, resets_at:(.resetsAt | epoch), status:.status,
+             available:true}'
+          continue
+        fi
+      fi
+    fi
     jq -nc --arg p "$provider" --arg m "$model" \
-      '{provider:$p, model:$m, window:null, used_percent:null, window_minutes:null, resets_at:null, available:false}'
+      '{provider:$p, model:$m, window:null, used_percent:null, window_minutes:null, resets_at:null, status:null, available:false}'
   done
 }
 
 cmd_usage() {
-  local json=0 records provider model window percent reset now_epoch filled empty bar label
-  [[ "${1:-}" == "--json" ]] && { json=1; shift; }
-  [[ $# == 0 ]] || die "usage: dispatch usage [--json]"
+  local json=0 probe=0 records provider model window percent reset status now_epoch filled empty bar label
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json=1 ;;
+      --probe|--live) probe=1 ;;
+      *) die "usage: dispatch usage [--json] [--probe|--live]" ;;
+    esac
+    shift
+  done
   need jq
-  records="$(usage_records)"
+  records="$(usage_records "$probe")"
   if [[ "$json" == 1 ]]; then
     printf '%s\n' "$records" | jq -s .
     return
   fi
   now_epoch="$(date +%s)"
-  while IFS=$'\t' read -r provider model window percent reset; do
+  while IFS=$'\t' read -r provider model window percent reset status; do
     if [[ "$percent" == "n/a" ]]; then
-      printf "%-7s %-18s [%-20s]  n/a   resets n/a\n" "$provider" "$model" ""
+      if [[ "$reset" != "n/a" ]]; then
+        printf "%-7s %-18s [%-20s]  n/a   %-9s resets %s\n" "$provider" "$model" "" "${status:-$window}" "$(human_duration "$((reset - now_epoch))")"
+      else
+        printf "%-7s %-18s [%-20s]  n/a   resets n/a\n" "$provider" "$model" ""
+      fi
       continue
     fi
     # Round to the nearest bar cell while preserving the server's percentage in the label.
@@ -453,9 +483,10 @@ cmd_usage() {
     label="$window"
     printf "%-7s %-18s [%s] %5s%%  %-9s resets %s\n" "$provider" "$model" "$bar" "$percent" "$label" "$(human_duration "$((reset - now_epoch))")"
   done < <(printf '%s\n' "$records" | jq -r '[.provider,.model,
-    (if .available then (if .window_minutes==300 then "5h" elif .window_minutes==10080 then "weekly" else ((.window_minutes|tostring)+"m") end) else "n/a" end),
-    (if .available then (.used_percent|tostring) else "n/a" end),
-    (if .available then (.resets_at|tostring) else "0" end)] | @tsv')
+    (if .available then (.window // (if .window_minutes==300 then "5h" elif .window_minutes==10080 then "weekly" else ((.window_minutes|tostring)+"m") end)) else "n/a" end),
+    (if .used_percent != null then (.used_percent|tostring) else "n/a" end),
+    (if .resets_at != null then (.resets_at|tostring) else "n/a" end),
+    (.status // "")] | @tsv')
 }
 
 main() {
