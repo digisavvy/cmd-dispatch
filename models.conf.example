@@ -29,3 +29,9 @@ haiku     = claude haiku
 
 # gemini stub (CLI not installed; flags UNVERIFIED — do not run):
 # gpro    = gemini gemini-2.5-pro
+
+# Kimi (Moonshot) — via the kimi-code CLI (`~/.kimi-code/bin/kimi`, key configured there).
+# Model = kimi-code config alias (provider-prefixed). Symlink kimi onto PATH: ln -sf ~/.kimi-code/bin/kimi ~/.local/bin/kimi
+kimi      = kimi moonshot-ai/kimi-k3
+kimi-code = kimi moonshot-ai/kimi-k2.7-code
+kimi-fast = kimi moonshot-ai/kimi-k2.7-code-highspeed

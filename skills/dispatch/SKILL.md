@@ -33,6 +33,7 @@ Aliases live in `models.conf` as `<alias> = <provider> <model>`; the user just s
 |---|---|---|---|
 | **Codex** | `5.6` | `5.6-terra` | `5.6-luna` |
 | **Claude** | `opus` | `sonnet` | `haiku` |
+| **Kimi** | `kimi` (k3) | `kimi-code` (k2.7-code) | `kimi-fast` |
 
 If the user doesn't name a model, use **`/pick`** (or `/dispatch #N` with no model) — it shows a
 provider→tier menu and dispatches the choice, so no aliases need memorizing. `dispatch doctor`

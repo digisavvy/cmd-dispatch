@@ -53,7 +53,7 @@ resolve_model() {
   if [[ -n "$val" ]]; then
     provider="${val%%[[:space:]]*}"
     model="${val#"$provider"}"; model="${model#${model%%[![:space:]]*}}"
-    [[ "$provider" =~ ^(codex|claude|gemini)$ && -n "$model" ]] \
+    [[ "$provider" =~ ^(codex|claude|gemini|kimi)$ && -n "$model" ]] \
       || die "invalid model alias '$key': expected '<provider> <model>' in $MODELS_CONF"
     printf '%s %s\n' "$provider" "$model"
     return
@@ -62,6 +62,7 @@ resolve_model() {
     gpt-*|codex-*) provider="codex" ;;
     claude-*) provider="claude" ;;
     gemini-*) provider="gemini" ;;
+    moonshot-*|kimi-*) provider="kimi" ;;
     *) die "model alias '$key' not found and provider cannot be inferred; add it to $MODELS_CONF as '<alias> = <provider> <model>'" ;;
   esac
   printf '%s %s\n' "$provider" "$key"
@@ -108,6 +109,12 @@ render_event() { # render_event <jobdir> <json-line>
           ([.message.content[]? | if .type=="text" then "msg: " + ((.text//""|gsub("\\s+";" "))[0:120]) elif .type=="tool_use" then "tool: " + (.name//"unknown") else empty end] | join(", "))
         elif .type=="result" then "result: " + ((.result//.text//""|gsub("\\s+";" "))[0:120])
         elif .type=="system" then "started" else .type end' 2>/dev/null || echo "${line:0:140}"
+    elif [[ "$provider" == "kimi" ]]; then
+      printf '%s\n' "$line" | jq -r '
+        if .role=="assistant" then "msg: " + (((.content//"")|gsub("\\s+";" "))[0:120])
+        elif .role=="tool" then "tool: " + (((.name // .tool // .content // "")|tostring|gsub("\\s+";" "))[0:80])
+        elif .role=="meta" then (.type // "meta")
+        else (.role // .type // "event") end' 2>/dev/null || echo "${line:0:140}"
     else
       echo "${line:0:140}"
     fi
@@ -133,7 +140,7 @@ cmd_doctor() {
   echo
   echo "Providers:"
   local provider path version
-  for provider in codex claude gemini; do
+  for provider in codex claude gemini kimi; do
     if path="$(command -v "$provider" 2>/dev/null)"; then
       version="$($provider --version 2>/dev/null | head -1)"
       echo "  installed  $provider  $path${version:+ ($version)}"
@@ -247,6 +254,17 @@ EOF
   > "$jd/events.jsonl" 2> "$jd/worker.log"
 worker_ec=\$?
 tail -1 "$jd/events.jsonl" > "$jd/last_message.txt"
+echo \$worker_ec > "$jd/exitcode"
+EOF
+    ;;
+  kimi) cat > "$jd/run.sh" <<EOF
+#!/usr/bin/env bash
+# Kimi Code CLI: -p prompt mode auto-runs tools (no approval flag); stream-json keys on 'role'.
+( cd "$wt" && kimi -p "\$(cat "$jd/prompt.txt")" -m "$model" \\
+    --output-format stream-json --add-dir "$gitcommon" ) \\
+  > "$jd/events.jsonl" 2> "$jd/worker.log"
+worker_ec=\$?
+jq -r 'select(.role=="assistant") | .content // empty' "$jd/events.jsonl" | tail -1 > "$jd/last_message.txt"
 echo \$worker_ec > "$jd/exitcode"
 EOF
     ;;
@@ -499,7 +517,7 @@ human_duration() {
 # session JSONL token_count events. Claude exposes reset/status data through an opt-in live probe.
 usage_records() {
   local probe="${1:-0}" provider model sessions latest snapshot window output event
-  for provider in codex claude gemini; do
+  for provider in codex claude gemini kimi; do
     model="$(usage_model "$provider")"
     [[ -n "$model" ]] || continue
     if [[ "$provider" == "codex" && -n "$(command -v jq 2>/dev/null)" ]]; then
