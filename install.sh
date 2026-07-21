@@ -11,6 +11,11 @@ ln -sf "$SRC/bin/dispatch" "$BIN_DIR/dispatch"
 # Symlink every slash command (dispatch, pick, …)
 for cmd in "$SRC"/commands/*.md; do ln -sf "$cmd" "$CMD_DIR/$(basename "$cmd")"; done
 
+# Symlink skills (dispatch, …) into Claude Code's skills dir
+SKILL_DIR="${DISPATCH_SKILL_DIR:-$HOME/.claude/skills}"
+mkdir -p "$SKILL_DIR"
+for s in "$SRC"/skills/*/; do [ -d "$s" ] && ln -sfn "${s%/}" "$SKILL_DIR/$(basename "$s")"; done
+
 # models.conf: copy (don't symlink) so edits don't collide with git updates, unless it exists.
 if [[ ! -f "$SRC/models.conf" ]]; then cp "$SRC/models.conf.example" "$SRC/models.conf" 2>/dev/null || true; fi
 
