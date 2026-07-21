@@ -11,7 +11,8 @@
 #   dispatch usage [--json] [--probe|--live] Show provider subscription usage and reset windows
 #   dispatch start <issue#> <model> [-R repo]   Spawn a worker on an issue
 #   dispatch status [issue#]              Show all jobs (or one) with live state
-#   dispatch logs <issue#> [-f]           Tail a worker's log
+#   dispatch wait <issue#> [options]       Block until a job finishes
+#   dispatch logs <issue#> [-f] [--raw|--events]  Tail worker output
 #   dispatch stop <issue#>                Kill a running worker (keeps the worktree)
 #   dispatch pr <issue#>                  Push the branch and open a PR (lead reviews first)
 #   dispatch clean <issue#>               Remove the worktree + branch + job state
@@ -85,11 +86,9 @@ job_state() {
 # Human summary of the latest codex --json event. Schema (see docs/codex-events.md):
 #   thread.started | turn.started | item.started | item.completed | turn.completed
 #   item.type ∈ { agent_message(.text) | file_change(.changes[]) | command_execution(.command,.exit_code) }
-last_event() {
-  local jd="$1" f="$1/events.jsonl" provider line
+render_event() { # render_event <jobdir> <json-line>
+  local jd="$1" line="$2" provider
   provider="$(meta_get "$jd" provider)"; provider="${provider:-codex}"
-  line="$(grep -E '^\s*\{' "$f" 2>/dev/null | tail -1)"
-  [[ -z "$line" ]] && line="$(tail -1 "$f" 2>/dev/null || true)"
   [[ -z "$line" ]] && return
   if command -v jq >/dev/null 2>&1 && printf '%s\n' "$line" | jq -e . >/dev/null 2>&1; then
     if [[ "$provider" == "codex" ]]; then
@@ -115,6 +114,13 @@ last_event() {
   else
     echo "${line:0:140}"
   fi
+}
+
+last_event() {
+  local jd="$1" f="$1/events.jsonl" line
+  line="$(grep -E '^\s*\{' "$f" 2>/dev/null | tail -1)"
+  [[ -z "$line" ]] && line="$(tail -1 "$f" 2>/dev/null || true)"
+  render_event "$jd" "$line"
 }
 
 cmd_doctor() {
@@ -279,6 +285,7 @@ print_job_row() { # print_job_row <jobdir>
     ev="$(last_event "$jd")"
   fi
   [[ -n "$ev" ]] && printf "         └─ %s\n" "$ev"
+  return 0
 }
 
 cmd_status() {
@@ -302,12 +309,101 @@ cmd_status() {
 }
 
 cmd_logs() {
-  local n="${1:-}"; shift || true
-  [[ -n "$n" ]] || die "usage: dispatch logs <issue#> [-f]"
-  local root; root="$(repo_root .)"
-  local log="$root/.dispatch/jobs/$n/worker.log"
+  local n="${1:-}" follow=0 mode="combined" arg root jd log events
+  shift || true
+  [[ -n "$n" ]] || die "usage: dispatch logs <issue#> [-f] [--raw|--events]"
+  while [[ $# -gt 0 ]]; do
+    arg="$1"; shift
+    case "$arg" in
+      -f|--follow) follow=1 ;;
+      --raw) mode="raw" ;;
+      --events) mode="events" ;;
+      *) die "usage: dispatch logs <issue#> [-f] [--raw|--events]" ;;
+    esac
+  done
+  root="$(repo_root .)"; jd="$root/.dispatch/jobs/$n"
+  log="$jd/worker.log"; events="$jd/events.jsonl"
+  [[ -d "$jd" ]] || die "no job for issue #$n"
   [[ -f "$log" ]] || die "no log for issue #$n"
-  if [[ "${1:-}" == "-f" ]]; then tail -f "$log"; else tail -40 "$log"; fi
+  if [[ "$mode" == "raw" || "$follow" == 0 && "$mode" == "combined" ]]; then
+    if [[ "$follow" == 1 ]]; then tail -f "$log"; else tail -40 "$log"; fi
+    return
+  fi
+  [[ -f "$events" ]] || die "no events for issue #$n"
+  if [[ "$follow" == 0 ]]; then
+    tail -40 "$events" | while IFS= read -r line; do render_event "$jd" "$line"; done
+    return
+  fi
+  if [[ "$mode" == "events" ]]; then
+    tail -n 40 -f "$events" | while IFS= read -r line; do render_event "$jd" "$line"; done
+    return
+  fi
+  tail -n 40 -f "$log" &
+  local log_pid=$!
+  trap "kill $log_pid 2>/dev/null || true" EXIT INT TERM
+  tail -n 40 -f "$events" | while IFS= read -r line; do render_event "$jd" "$line"; done
+}
+
+job_exit_status() { # job_exit_status <jobdir>
+  local ec
+  ec="$(cat "$1/exitcode" 2>/dev/null || true)"
+  [[ "$ec" =~ ^[0-9]+$ ]] || { echo 1; return; }
+  (( ec <= 255 )) || ec=1
+  echo "$ec"
+}
+
+cmd_wait() {
+  local target="${1:-}" status="any" timeout="" interval="5" arg root jobs_dir
+  local started now jd st ec
+  [[ -n "$target" ]] || die "usage: dispatch wait <issue#>|--any [--status done|any] [--timeout seconds] [--interval seconds]"
+  shift || true
+  while [[ $# -gt 0 ]]; do
+    arg="$1"; shift
+    case "$arg" in
+      --status) [[ $# -gt 0 ]] || die "--status requires done or any"; status="$1"; shift ;;
+      --timeout) [[ $# -gt 0 ]] || die "--timeout requires seconds"; timeout="$1"; shift ;;
+      --interval) [[ $# -gt 0 ]] || die "--interval requires seconds"; interval="$1"; shift ;;
+      *) die "unknown wait option '$arg'" ;;
+    esac
+  done
+  [[ "$status" == "any" || "$status" == "done" ]] || die "--status must be done or any"
+  [[ "$interval" =~ ^([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]] || die "--interval must be a positive number"
+  awk -v n="$interval" 'BEGIN { exit !(n > 0) }' || die "--interval must be a positive number"
+  if [[ -n "$timeout" ]]; then
+    [[ "$timeout" =~ ^[0-9]+$ ]] || die "--timeout must be a non-negative integer"
+  fi
+  root="$(repo_root .)"; jobs_dir="$root/.dispatch/jobs"
+  [[ -d "$jobs_dir" ]] || die "no dispatched jobs in $(basename "$root")"
+  local -a watched=()
+  if [[ "$target" == "--any" ]]; then
+    for jd in "$jobs_dir"/*/; do
+      [[ -d "$jd" && "$(job_state "$jd")" == "RUNNING" ]] && watched+=("$jd")
+    done
+    [[ ${#watched[@]} -gt 0 ]] || die "no active jobs to wait for"
+  else
+    [[ "$target" =~ ^[0-9]+$ ]] || die "issue must be a number or --any"
+    jd="$jobs_dir/$target"
+    [[ -d "$jd" ]] || die "no job for issue #$target"
+    watched+=("$jd")
+  fi
+  started="$(date +%s)"
+  while true; do
+    for jd in "${watched[@]}"; do
+      st="$(job_state "$jd")"
+      if [[ "$st" != "RUNNING" ]]; then
+        [[ "$target" == "--any" ]] && echo "issue #$(basename "$jd") finished:"
+        print_job_row "$jd"
+        ec="$(job_exit_status "$jd")"
+        [[ "$status" == "done" && "$st" != "DONE" ]] && return "${ec:-1}"
+        return "$ec"
+      fi
+    done
+    if [[ -n "$timeout" ]]; then
+      now="$(date +%s)"
+      (( now - started >= timeout )) && return 124
+    fi
+    sleep "$interval"
+  done
 }
 
 cmd_stop() {
@@ -497,6 +593,7 @@ main() {
     usage)  cmd_usage "$@" ;;
     start)  cmd_start "$@" ;;
     status) cmd_status "$@" ;;
+    wait)   cmd_wait "$@" ;;
     logs)   cmd_logs "$@" ;;
     stop)   cmd_stop "$@" ;;
     pr)     cmd_pr "$@" ;;

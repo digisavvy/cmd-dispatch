@@ -100,16 +100,30 @@ States are:
 
 For a single issue, status also prints the worktree path.
 
-### `dispatch logs <issue#> [-f]`
+### `dispatch wait <issue#>|--any [--status done|any] [--timeout seconds] [--interval seconds]`
 
-Prints the last 40 lines of `.dispatch/jobs/<n>/worker.log`, or follows it with `-f`.
+Waits for one job to reach a terminal state. By default it waits indefinitely, checks every five seconds, prints the final status row, and exits `0` for `DONE` or with the worker's exit code for `FAILED`; `KILLED` exits nonzero. `--status done` also treats every non-`DONE` result as failure. A timeout exits `124`.
+
+With `--any`, the command watches all jobs that are active when it starts and returns when the first one finishes, printing its issue number.
+
+```sh
+dispatch wait 41
+dispatch wait 41 --status done --timeout 600 --interval 2
+dispatch wait --any
+```
+
+### `dispatch logs <issue#> [-f] [--raw|--events]`
+
+Without options, prints the last 40 lines of `.dispatch/jobs/<n>/worker.log`, preserving the original stderr-only behavior. With `-f`, it interleaves stderr progress with a provider-aware rendered view of structured events so active workers do not appear idle.
 
 ```sh
 dispatch logs 41
 dispatch logs 41 -f
+dispatch logs 41 -f --raw
+dispatch logs 41 --events
 ```
 
-This is the worker's stderr stream. Structured JSON events are stored separately in `events.jsonl`.
+`--raw` selects stderr only. `--events` selects rendered events only and can also be combined with `-f`.
 
 ### `dispatch stop <issue#>`
 
