@@ -16,6 +16,12 @@ SKILL_DIR="${DISPATCH_SKILL_DIR:-$HOME/.claude/skills}"
 mkdir -p "$SKILL_DIR"
 for s in "$SRC"/skills/*/; do [ -d "$s" ] && ln -sfn "${s%/}" "$SKILL_DIR/$(basename "$s")"; done
 
+# Kimi Code lives at ~/.kimi-code/bin/kimi (separate install); symlink it onto PATH if present,
+# so the 'kimi' provider is detected by 'dispatch doctor'.
+if [ -x "$HOME/.kimi-code/bin/kimi" ] && ! command -v kimi >/dev/null 2>&1; then
+  ln -sf "$HOME/.kimi-code/bin/kimi" "$BIN_DIR/kimi" && echo "  linked: $BIN_DIR/kimi -> ~/.kimi-code/bin/kimi"
+fi
+
 # models.conf: copy (don't symlink) so edits don't collide with git updates, unless it exists.
 if [[ ! -f "$SRC/models.conf" ]]; then cp "$SRC/models.conf.example" "$SRC/models.conf" 2>/dev/null || true; fi
 
