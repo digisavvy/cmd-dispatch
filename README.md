@@ -90,8 +90,12 @@ if installed, else `osascript`). The message names the **next human action**:
 
 ## Documentation
 
+- [Agent conventions](AGENTS.md) - the foreman, worker, review, and pull-request contract
 - [Getting started](docs/getting-started.md) - a 5-minute walkthrough of using it (start here)
 - [Usage](docs/usage.md) - install, CLI commands, `/dispatch`, and model aliases
+- [Merge gate](docs/gate.md) - opt-in headless review and its approval contract
+- [Notifications](docs/notifications.md) - attention states, channels, payload, and custom hooks
+- [Troubleshooting](docs/troubleshooting.md) - common shell, model, sandbox, cache, and gate gotchas
 - [Architecture](docs/architecture.md) - worktrees, worker processes, state files, and PR gate
 - [Limitations](docs/limitations.md) - current boundaries and missing commands
 - [Codex events](docs/codex-events.md) - observed `codex exec --json` event vocabulary
