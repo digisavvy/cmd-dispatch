@@ -81,9 +81,9 @@ if installed, else `osascript`). The message names the **next human action**:
 [dispatch] #52 FAILED(1) — sonnet on my-project. Next: worker errored — inspect: dispatch logs 52
 ```
 
-- `DISPATCH_NOTIFY_CMD=<cmd>` routes the same event anywhere (Slack, ntfy, cowork-bridge) — the
+- `DISPATCH_NOTIFY_CMD=<executable>` routes the same event anywhere (Slack, ntfy, cowork-bridge) — the
   command runs with the job context in `DISPATCH_*` env vars (issue, state, provider, model, repo,
-  next action, PR url) and the headline as args.
+  next action, PR url) and the headline as args. Use a wrapper script if the command needs flags.
 - `DISPATCH_NOTIFY=off` silences everything.
 - Notifications are additive: the exit code is already on disk before they fire, so a wedged
   channel never blocks a worker or the foreman's loop.
@@ -91,6 +91,7 @@ if installed, else `osascript`). The message names the **next human action**:
 ## Documentation
 
 - [Agent conventions](AGENTS.md) - the foreman, worker, review, and pull-request contract
+- [Security](SECURITY.md) - trust model, residual worker risks, and safe-use guidance
 - [Getting started](docs/getting-started.md) - a 5-minute walkthrough of using it (start here)
 - [Usage](docs/usage.md) - install, CLI commands, `/dispatch`, and model aliases
 - [Merge gate](docs/gate.md) - opt-in headless review and its approval contract
