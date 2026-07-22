@@ -1,6 +1,6 @@
 # cmd-dispatch
 
-A thin **conversational foreman** for coding agents. You talk to a lead agent (Claude Code / Fable)
+When Anthropic decided to make Fable available but at 50% usage levels it made me wonder: How can I most benefit from Fable's awesomeness? Enter cmd-dispatch, A thin **conversational foreman** for coding agents. You talk to a lead agent (Claude Code / Fable)
 and say *"put sonnet on #41, 5.6 on the other two"* — it spawns one headless **Codex or Claude** worker
 per GitHub issue, using the provider implied by the model alias. Each gets its own git worktree/branch,
 and the lead
