@@ -17,6 +17,7 @@
 #   dispatch gate <issue#> [--gate-model alias] Review a finished job; open PR if approved
 #   dispatch pr <issue#>                  Push the branch and open a PR (lead reviews first)
 #   dispatch clean <issue#>               Remove the worktree + branch + job state
+#   dispatch notify <issue#> <state> [msg]  Ping a human (bell + macOS banner + $DISPATCH_NOTIFY_CMD)
 #
 # <model> may be an alias from models.conf (e.g. 5.6) or a raw Codex model string.
 set -euo pipefail
@@ -30,6 +31,7 @@ while [ -h "$_src" ]; do
 done
 SELF_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
 SELF="$SELF_DIR/$(basename "$_src")"
+SELF_BIN="$SELF"
 MODELS_CONF="${DISPATCH_MODELS_CONF:-$SELF_DIR/../models.conf}"
 
 die() { echo "dispatch: $*" >&2; exit 1; }
@@ -186,9 +188,10 @@ cmd_start() {
   [[ "$gate" == 1 || "$gate_model_set" == 0 ]] || die "--gate-model requires --gate"
   need gh; need git; need jq
 
-  local root sd jd provider model resolved branch wt issue_json title body gitcommon
+  local root sd jd provider model resolved branch wt issue_json title body gitcommon dispatch_bin
   root="$(repo_root "$repo")"
   sd="$root/.dispatch"; jd="$sd/jobs/$n"
+  dispatch_bin="$SELF_BIN"
   [[ -e "$jd" ]] && die "job for issue #$n already exists. (dispatch status $n | dispatch stop $n | dispatch clean $n)"
 
   resolved="$(resolve_model "$alias")"
@@ -240,6 +243,9 @@ codex exec -C "$wt" -m "$model" --sandbox workspace-write --add-dir "$gitcommon"
   > "$jd/events.jsonl" 2> "$jd/worker.log"
 worker_ec=\$?
 echo \$worker_ec > "$jd/exitcode"
+# Ping the human (additive — exitcode is already on disk, so a wedged channel can't block).
+_state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
+"$dispatch_bin" notify "$n" "\$_state" -R "$root" >/dev/null 2>&1 || true
 EOF
     ;;
   claude) cat > "$jd/run.sh" <<EOF
@@ -251,6 +257,10 @@ EOF
 worker_ec=\$?
 jq -r 'select(.type=="result") | .result // .text // empty' "$jd/events.jsonl" | tail -1 > "$jd/last_message.txt"
 echo \$worker_ec > "$jd/exitcode"
+# Ping the human (additive — exitcode is already on disk, so a wedged channel can't block).
+# The #15 gate step slots in above and passes its verdict as the notify message.
+_state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
+"$dispatch_bin" notify "$n" "\$_state" -R "$root" >/dev/null 2>&1 || true
 EOF
     ;;
   gemini) cat > "$jd/run.sh" <<EOF
@@ -261,6 +271,10 @@ EOF
 worker_ec=\$?
 tail -1 "$jd/events.jsonl" > "$jd/last_message.txt"
 echo \$worker_ec > "$jd/exitcode"
+# Ping the human (additive — exitcode is already on disk, so a wedged channel can't block).
+# The #15 gate step slots in above and passes its verdict as the notify message.
+_state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
+"$dispatch_bin" notify "$n" "\$_state" -R "$root" >/dev/null 2>&1 || true
 EOF
     ;;
   kimi) cat > "$jd/run.sh" <<EOF
@@ -272,6 +286,10 @@ EOF
 worker_ec=\$?
 jq -r 'select(.role=="assistant") | .content // empty' "$jd/events.jsonl" | tail -1 > "$jd/last_message.txt"
 echo \$worker_ec > "$jd/exitcode"
+# Ping the human (additive — exitcode is already on disk, so a wedged channel can't block).
+# The #15 gate step slots in above and passes its verdict as the notify message.
+_state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
+"$dispatch_bin" notify "$n" "\$_state" -R "$root" >/dev/null 2>&1 || true
 EOF
     ;;
   esac
@@ -613,6 +631,60 @@ cmd_clean() {
   echo "cleaned #$n (worktree, branch, and job state removed)."
 }
 
+# Push a human notification when a job enters an attention state (DONE / FAILED / STALLED /
+# gate verdict). Additive by design: run.sh calls this AFTER writing exitcode, so a wedged
+# channel can never block the worker or the foreman's polling loop.
+cmd_notify() {
+  local n="" state="" repo="."
+  local -a extra=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -R|--repo) repo="$2"; shift 2 ;;
+      *) if [[ -z "$n" ]]; then n="$1"; elif [[ -z "$state" ]]; then state="$1"; else extra+=("$1"); fi; shift ;;
+    esac
+  done
+  [[ -n "$n" && -n "$state" ]] || die "usage: dispatch notify <issue#> <state> [next-action...] [-R repo]"
+  [[ "${DISPATCH_NOTIFY:-on}" == "off" ]] && return 0
+
+  local root jd repo_name provider model pr_url action payload esc
+  root="$(repo_root "$repo")"; jd="$root/.dispatch/jobs/$n"; repo_name="$(basename "$root")"
+  provider="$(meta_get "$jd" provider || true)"; provider="${provider:-unknown}"
+  model="$(meta_get "$jd" model || true)"; model="${model:-unknown}"
+  pr_url="$(meta_get "$jd" pr_url || true)"  # written by the auto-gate (#15) when it opens a PR
+  action="${extra[*]:-}"
+  if [[ -z "$action" ]]; then
+    case "$state" in
+      DONE)     action="review & merge: dispatch pr $n" ;;
+      FAILED*)  action="worker errored — inspect: dispatch logs $n" ;;
+      STALLED*) action="may be stuck / awaiting something — check: dispatch logs $n -f" ;;
+      *)        action="dispatch status $n" ;;
+    esac
+  fi
+  payload="[dispatch] #$n $state — $model on $repo_name. Next: $action"
+
+  # Terminal bell on the controlling terminal, if the session still has one.
+  { printf '\a' > /dev/tty; } 2>/dev/null || true
+
+  # macOS native banner: terminal-notifier when installed, osascript otherwise.
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    if command -v terminal-notifier >/dev/null 2>&1; then
+      terminal-notifier -title "dispatch" -message "$payload" >/dev/null 2>&1 || true
+    elif command -v osascript >/dev/null 2>&1; then
+      esc="${payload//\\/\\\\}"; esc="${esc//\"/\\\"}"
+      osascript -e "display notification \"$esc\" with title \"dispatch\"" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  # Custom hook (Slack / cowork-bridge / ntfy / ...): job context in env, headline in args.
+  # Unquoted $DISPATCH_NOTIFY_CMD so the value may carry flags; keep the hook fast.
+  if [[ -n "${DISPATCH_NOTIFY_CMD:-}" ]]; then
+    DISPATCH_ISSUE="$n" DISPATCH_STATE="$state" DISPATCH_PROVIDER="$provider" \
+    DISPATCH_MODEL="$model" DISPATCH_REPO="$repo_name" DISPATCH_REPO_ROOT="$root" \
+    DISPATCH_NEXT_ACTION="$action" DISPATCH_PR_URL="$pr_url" DISPATCH_MESSAGE="$payload" \
+    $DISPATCH_NOTIFY_CMD "$n" "$state" "$payload" >/dev/null 2>&1 || true
+  fi
+}
+
 # List model aliases with provider, resolved slug, and (for Codex) cached description.
 # The /dispatch picker builds its menu from this, so options never drift from models.conf.
 cmd_models() {
@@ -761,9 +833,10 @@ main() {
     gate)   cmd_gate "$@" ;;
     pr)     cmd_pr "$@" ;;
     clean)  cmd_clean "$@" ;;
+    notify) cmd_notify "$@" ;;
     version|--version|-v) echo "dispatch $VERSION" ;;
     ""|help|-h|--help)
-      sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+      sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
     *) die "unknown command '$cmd' (try: dispatch help)" ;;
   esac
 }

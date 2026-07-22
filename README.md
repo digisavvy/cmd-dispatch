@@ -70,6 +70,24 @@ dispatch clean 52             # remove worktree + branch + job state (to reassig
 dispatch pr 41                # push branch + open PR closing the issue (after you review)
 ```
 
+## Notifications
+
+When a job enters a state that needs a human (`DONE`, `FAILED(code)`), the generated `run.sh`
+pings you after writing its exit code — terminal bell plus a macOS banner (`terminal-notifier`
+if installed, else `osascript`). The message names the **next human action**:
+
+```text
+[dispatch] #41 DONE — gpt-5.6-sol on my-project. Next: review & merge: dispatch pr 41
+[dispatch] #52 FAILED(1) — sonnet on my-project. Next: worker errored — inspect: dispatch logs 52
+```
+
+- `DISPATCH_NOTIFY_CMD=<cmd>` routes the same event anywhere (Slack, ntfy, cowork-bridge) — the
+  command runs with the job context in `DISPATCH_*` env vars (issue, state, provider, model, repo,
+  next action, PR url) and the headline as args.
+- `DISPATCH_NOTIFY=off` silences everything.
+- Notifications are additive: the exit code is already on disk before they fire, so a wedged
+  channel never blocks a worker or the foreman's loop.
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md) - a 5-minute walkthrough of using it (start here)
