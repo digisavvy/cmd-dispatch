@@ -86,33 +86,36 @@ Claude does not persist subscription-window utilization. By default its row ther
 and reset time; Claude does not report a numeric used percentage, so its bar remains `n/a`.
 Providers without observed usage data degrade the same way.
 
-### `dispatch status [issue#]`
+### `dispatch status [issue#] [--stale-after seconds]`
 
 Shows all jobs, or one job, with state and the latest parsed event or final worker message.
 
 ```sh
 dispatch status
 dispatch status 41
+dispatch status 41 --stale-after 600
 ```
 
 States are:
 
 - `RUNNING` when the recorded pid is alive and no exit code exists
+- `STALLED` when a running job's newest event is at least five minutes old
 - `DONE` when `exitcode` exists and is `0`
 - `FAILED(code)` when `exitcode` exists and is nonzero
 - `KILLED` when there is no exit code and the recorded pid is not alive
 
-For a single issue, status also prints the worktree path.
+For a single issue, status also prints the worktree path. `STALLED` is a heuristic, not a failure; some legitimate tasks are quiet during a long tool call. Use `--stale-after` to change the threshold in seconds.
 
-### `dispatch wait <issue#>|--any [--status done|any] [--timeout seconds] [--interval seconds]`
+### `dispatch wait <issue#>|--any [--status done|any|stalled] [--stale-after seconds] [--timeout seconds] [--interval seconds]`
 
-Waits for one job to reach a terminal state. By default it waits indefinitely, checks every five seconds, prints the final status row, and exits `0` for `DONE` or with the worker's exit code for `FAILED`; `KILLED` exits nonzero. `--status done` also treats every non-`DONE` result as failure. A timeout exits `124`.
+Waits for one job to reach a terminal state. By default it waits indefinitely, checks every five seconds, prints the final status row, and exits `0` for `DONE` or with the worker's exit code for `FAILED`; `KILLED` exits nonzero. `--status done` also treats every non-`DONE` result as failure. `--status stalled` additionally wakes with exit code `0` when the job is heuristically `STALLED`; `--stale-after` changes the default 300-second threshold. A timeout exits `124`.
 
 With `--any`, the command watches all jobs that are active when it starts and returns when the first one finishes, printing its issue number.
 
 ```sh
 dispatch wait 41
 dispatch wait 41 --status done --timeout 600 --interval 2
+dispatch wait 41 --status stalled --stale-after 600
 dispatch wait --any
 ```
 
