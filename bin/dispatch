@@ -16,7 +16,7 @@
 #   dispatch stop <issue#>                Kill a running worker (keeps the worktree)
 #   dispatch gate <issue#> [--gate-model alias] Review a finished job; open PR if approved
 #   dispatch pr <issue#>                  Push the branch and open a PR (lead reviews first)
-#   dispatch clean <issue#>               Remove the worktree + branch + job state
+#   dispatch clean <issue#> [--force]     Remove the worktree + branch + job state
 #   dispatch notify <issue#> <state> [msg]  Ping a human (bell + macOS banner + $DISPATCH_NOTIFY_CMD)
 #
 # <model> may be an alias from models.conf (e.g. 5.6) or a raw Codex model string.
@@ -205,7 +205,7 @@ cmd_start() {
   [[ "$gate" == 1 || "$gate_model_set" == 0 ]] || die "--gate-model requires --gate"
   need gh; need git; need jq
 
-  local root sd jd provider model resolved branch wt issue_json title body gitcommon dispatch_bin
+  local root sd jd provider model resolved branch base_branch wt issue_json title body gitcommon dispatch_bin
   root="$(repo_root "$repo")"
   sd="$root/.dispatch"; jd="$sd/jobs/$n"
   dispatch_bin="$SELF_BIN"
@@ -215,6 +215,8 @@ cmd_start() {
   read -r provider model <<< "$resolved"
   command -v "$provider" >/dev/null 2>&1 || die "$provider not installed"
   branch="dispatch/issue-$n"
+  base_branch="$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null)" \
+    || die "target repository must be on a branch before starting a job"
   wt="$(cd "$root/.." && pwd)/$(basename "$root")-wt-issue-$n"
 
   issue_json="$(cd "$root" && gh issue view "$n" --json number,title,body 2>/dev/null)" \
@@ -330,6 +332,7 @@ alias=$alias
 provider=$provider
 model=$model
 branch=$branch
+base_branch=$base_branch
 worktree=$wt
 gate=$gate
 gate_model=$gate_model
@@ -664,10 +667,16 @@ Dispatched worker (model $(meta_get "$jd" model)). Reviewed by lead before open.
 }
 
 cmd_clean() {
-  [[ $# -eq 1 ]] || die "usage: dispatch clean <issue#>"
-  local n="$1"
+  local n="" force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force) force=1; shift ;;
+      *) [[ -z "$n" ]] || die "usage: dispatch clean <issue#> [--force]"; n="$1"; shift ;;
+    esac
+  done
+  [[ -n "$n" ]] || die "usage: dispatch clean <issue#> [--force]"
   validate_issue "$n"
-  local root sd jd wt wt_check branch expected_wt expected_branch
+  local root sd jd wt wt_check branch base_branch expected_wt expected_branch ahead
   root="$(repo_root .)"; sd="$root/.dispatch"; jd="$sd/jobs/$n"
   [[ -n "$root" && -n "$sd" && "$jd" == "$sd/jobs/$n" ]] || die "refusing unsafe job path: $jd"
   [[ -d "$jd" ]] || die "no job for issue #$n"
@@ -677,9 +686,23 @@ cmd_clean() {
   wt_check="$wt"; [[ -d "$wt" ]] && wt_check="$(cd "$wt" && pwd -P)"
   [[ -n "$wt" && "$wt_check" == "$expected_wt" ]] || die "refusing unsafe worktree path in job #$n: ${wt:-<empty>}"
   [[ -n "$branch" && "$branch" == "$expected_branch" ]] || die "refusing unsafe branch in job #$n: ${branch:-<empty>}"
+  base_branch="$(meta_get "$jd" base_branch)"
+  if [[ -z "$base_branch" ]]; then
+    base_branch="$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null)" \
+      || die "cannot determine the base branch for job #$n"
+  fi
+  if git -C "$root" rev-parse --verify --quiet "$branch^{commit}" >/dev/null; then
+    git -C "$root" rev-parse --verify --quiet "$base_branch^{commit}" >/dev/null \
+      || die "base branch '$base_branch' for job #$n is missing"
+    ahead="$(git -C "$root" rev-list --count "$base_branch..$branch")"
+    if (( ahead > 0 && force == 0 )); then
+      die "refusing to clean #$n: $branch has $ahead commit(s) not merged into $base_branch. Open and merge a PR to preserve the work, or run 'dispatch clean $n --force' to discard it."
+    fi
+  fi
   local pid; pid="$(cat "$jd/pid" 2>/dev/null || true)"
   [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
   [[ -n "$wt" && -d "$wt" ]] && git -C "$root" worktree remove --force "$wt" 2>/dev/null || true
+  git -C "$root" worktree prune
   [[ -n "$branch" ]] && git -C "$root" branch -D "$branch" 2>/dev/null || true
   rm -rf "$jd"
   echo "cleaned #$n (worktree, branch, and job state removed)."

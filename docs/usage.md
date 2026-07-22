@@ -171,7 +171,7 @@ dispatch gate 41
 dispatch gate 41 --gate-model 5.6
 ```
 
-### `dispatch clean <issue#>`
+### `dispatch clean <issue#> [--force]`
 
 Stops the recorded pid if present, force-removes the worktree, deletes the local branch, and removes `.dispatch/jobs/<n>/`.
 
@@ -179,7 +179,9 @@ Stops the recorded pid if present, force-removes the worktree, deletes the local
 dispatch clean 52
 ```
 
-This is the reset path for reassigning or starting over on an issue.
+This is the reset path for reassigning or starting over on an issue. Cleanup refuses to delete a
+worker branch with commits that have not been merged into its base branch. Open and merge a PR to
+preserve that work, or pass `--force` to intentionally discard it.
 
 ### `dispatch notify <issue#> <state> [next-action...] [-R repo]`
 
