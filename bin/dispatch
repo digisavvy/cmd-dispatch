@@ -14,6 +14,7 @@
 #   dispatch wait <issue#> [options]       Block until a job finishes
 #   dispatch logs <issue#> [-f] [--raw|--events]  Tail worker output
 #   dispatch stop <issue#>                Kill a running worker (keeps the worktree)
+#   dispatch gate <issue#> [--gate-model alias] Review a finished job; open PR if approved
 #   dispatch pr <issue#>                  Push the branch and open a PR (lead reviews first)
 #   dispatch clean <issue#>               Remove the worktree + branch + job state
 #   dispatch notify <issue#> <state> [msg]  Ping a human (bell + macOS banner + $DISPATCH_NOTIFY_CMD)
@@ -29,7 +30,8 @@ while [ -h "$_src" ]; do
   _src="$(readlink "$_src")"; [[ "$_src" != /* ]] && _src="$_dir/$_src"
 done
 SELF_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
-SELF_BIN="$SELF_DIR/$(basename "$_src")"
+SELF="$SELF_DIR/$(basename "$_src")"
+SELF_BIN="$SELF"
 MODELS_CONF="${DISPATCH_MODELS_CONF:-$SELF_DIR/../models.conf}"
 
 die() { echo "dispatch: $*" >&2; exit 1; }
@@ -172,15 +174,18 @@ cmd_doctor() {
 }
 
 cmd_start() {
-  local n="" alias="" repo="."
+  local n="" alias="" repo="." gate=0 gate_model="opus" gate_model_set=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -R|--repo) repo="$2"; shift 2 ;;
+      --gate) gate=1; shift ;;
+      --gate-model) [[ $# -gt 1 ]] || die "--gate-model requires an alias"; gate_model="$2"; gate_model_set=1; shift 2 ;;
       *) if [[ -z "$n" ]]; then n="$1"; elif [[ -z "$alias" ]]; then alias="$1"; fi; shift ;;
     esac
   done
-  [[ -n "$n" && -n "$alias" ]] || die "usage: dispatch start <issue#> <model> [-R repo]"
+  [[ -n "$n" && -n "$alias" ]] || die "usage: dispatch start <issue#> <model> [-R repo] [--gate] [--gate-model alias]"
   [[ "$n" =~ ^[0-9]+$ ]] || die "issue# must be a number, got '$n'"
+  [[ "$gate" == 1 || "$gate_model_set" == 0 ]] || die "--gate-model requires --gate"
   need gh; need git; need jq
 
   local root sd jd provider model resolved branch wt issue_json title body gitcommon dispatch_bin
@@ -239,7 +244,6 @@ codex exec -C "$wt" -m "$model" --sandbox workspace-write --add-dir "$gitcommon"
 worker_ec=\$?
 echo \$worker_ec > "$jd/exitcode"
 # Ping the human (additive — exitcode is already on disk, so a wedged channel can't block).
-# The #15 gate step slots in above and passes its verdict as the notify message.
 _state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
 "$dispatch_bin" notify "$n" "\$_state" -R "$root" >/dev/null 2>&1 || true
 EOF
@@ -289,6 +293,13 @@ _state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
 EOF
     ;;
   esac
+  if [[ "$gate" == 1 ]]; then
+    cat >> "$jd/run.sh" <<EOF
+if [[ \$worker_ec == 0 ]]; then
+  nohup "$SELF" gate "$n" --gate-model "$gate_model" >/dev/null 2>&1 &
+fi
+EOF
+  fi
   chmod +x "$jd/run.sh"
 
   cat > "$jd/meta" <<EOF
@@ -298,6 +309,8 @@ provider=$provider
 model=$model
 branch=$branch
 worktree=$wt
+gate=$gate
+gate_model=$gate_model
 started_at=$(now)
 EOF
 
@@ -456,6 +469,135 @@ cmd_stop() {
     echo "stopped #$n (worktree kept: $(meta_get "$jd" worktree)). Reassign with: dispatch clean $n && dispatch start $n <model>"
   else
     echo "#$n is not running (state: $(job_state "$jd"))."
+  fi
+}
+
+run_gate_model() { # run_gate_model <provider> <model> <worktree> <prompt-file> <scratch-dir>
+  local provider="$1" model="$2" wt="$3" prompt_file="$4" scratch="$5" ec=0
+  case "$provider" in
+    codex)
+      codex exec -C "$wt" -m "$model" --sandbox read-only \
+        -o "$scratch/result.txt" "$(cat "$prompt_file")" >/dev/null 2>"$scratch/stderr.log" || ec=$?
+      cat "$scratch/result.txt" 2>/dev/null || true
+      ;;
+    claude)
+      ( cd "$wt" && claude -p "$(cat "$prompt_file")" --model "$model" \
+          --output-format stream-json --verbose ) >"$scratch/events.jsonl" 2>"$scratch/stderr.log" || ec=$?
+      jq -rs '[.[] | select(.type=="result") | .result // .text // empty] | last // empty' \
+        "$scratch/events.jsonl" 2>/dev/null
+      ;;
+    kimi)
+      ( cd "$wt" && kimi -p "$(cat "$prompt_file")" -m "$model" ) \
+        >"$scratch/result.txt" 2>"$scratch/stderr.log" || ec=$?
+      cat "$scratch/result.txt" 2>/dev/null || true
+      ;;
+    *)
+      printf 'Unsupported gate provider: %s\n' "$provider"
+      ec=1
+      ;;
+  esac
+  if (( ec != 0 )); then
+    printf '\nGate model exited with status %s.\n' "$ec"
+    cat "$scratch/stderr.log" 2>/dev/null || true
+  fi
+  return "$ec"
+}
+
+cmd_gate() {
+  local n="" gate_alias="opus" root jd wt state resolved provider model issue_json title body
+  local scratch diff_file prompt_file model_output lint_output markers verdict lint_ok=1 model_ok=1 gate_file output
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --gate-model) [[ $# -gt 1 ]] || die "--gate-model requires an alias"; gate_alias="$2"; shift 2 ;;
+      *) [[ -z "$n" ]] || die "usage: dispatch gate <issue#> [--gate-model alias]"; n="$1"; shift ;;
+    esac
+  done
+  [[ "$n" =~ ^[0-9]+$ ]] || die "usage: dispatch gate <issue#> [--gate-model alias]"
+  need gh; need git; need jq
+  root="$(repo_root .)"; jd="$root/.dispatch/jobs/$n"; gate_file="$jd/gate.md"
+  [[ -d "$jd" ]] || die "no job for issue #$n"
+  state="$(job_state "$jd")"
+  [[ "$state" == "DONE" ]] || die "gate requires a DONE job; issue #$n is $state"
+  wt="$(meta_get "$jd" worktree)"
+  [[ -d "$wt" ]] || die "worktree missing for issue #$n: $wt"
+  git -C "$wt" rev-parse --verify HEAD >/dev/null 2>&1 || die "issue #$n has no commit to review"
+
+  resolved="$(resolve_model "$gate_alias")"; read -r provider model <<< "$resolved"
+  command -v "$provider" >/dev/null 2>&1 || die "$provider not installed"
+  issue_json="$(cd "$root" && gh issue view "$n" --json title,body 2>/dev/null)" \
+    || die "could not fetch issue #$n via gh"
+  title="$(printf '%s\n' "$issue_json" | jq -r '.title')"
+  body="$(printf '%s\n' "$issue_json" | jq -r '.body // ""')"
+  scratch="$(mktemp -d "${TMPDIR:-/tmp}/dispatch-gate.XXXXXX")"
+  trap 'rm -rf "$scratch"' RETURN
+  diff_file="$scratch/diff.txt"; prompt_file="$scratch/prompt.txt"
+  git -C "$wt" show --format=fuller --stat --patch HEAD > "$diff_file"
+
+  lint_output=""
+  while IFS= read -r file; do
+    [[ "$file" == *.php && -f "$wt/$file" ]] || continue
+    if ! output="$(php -l "$wt/$file" 2>&1)"; then lint_ok=0; fi
+    lint_output+="$output"$'\n'
+  done < <(git -C "$wt" show --format= --name-only --diff-filter=ACMR HEAD)
+  markers="$(grep -E '^\+.*(\[VERIFY\]|TODO)' "$diff_file" 2>/dev/null || true)"
+
+  cat > "$prompt_file" <<EOF
+You are a strict merge gate. Review this diff for issue #$n against its stated requirements. Check correctness, scope adherence (only what was asked — flag scope creep), fabricated facts/IDs/claims, and lint. End with a line EXACTLY \`VERDICT: APPROVE\` or \`VERDICT: REJECT\`, then bullet findings.
+
+ISSUE TITLE: $title
+
+ISSUE BODY:
+$body
+
+WORKER FINAL MESSAGE:
+$(cat "$jd/last_message.txt" 2>/dev/null || true)
+
+OBJECTIVE CHECKS:
+PHP lint: $([[ "$lint_ok" == 1 ]] && echo PASS || echo FAIL)
+${lint_output:-No changed PHP files.}
+Leftover [VERIFY]/TODO additions:
+${markers:-None.}
+
+COMMIT DIFF:
+$(cat "$diff_file")
+EOF
+
+  if [[ "$lint_ok" == 1 ]]; then
+    model_output="$(run_gate_model "$provider" "$model" "$wt" "$prompt_file" "$scratch")" || model_ok=0
+  else
+    model_output="VERDICT: REJECT
+- PHP lint failed; the reviewer was not run.
+$lint_output"
+  fi
+  verdict="$(printf '%s\n' "$model_output" | grep -E '^VERDICT: (APPROVE|REJECT)$' | tail -1 | sed 's/^VERDICT: //' || true)"
+  if [[ -z "$verdict" ]]; then
+    model_output+=$'\n- Gate model did not return a valid VERDICT line.'
+  fi
+  [[ "$lint_ok" == 1 && "$model_ok" == 1 && "$verdict" == "APPROVE" ]] || verdict="REJECT"
+  {
+    echo "# Merge gate for issue #$n"
+    echo
+    echo "Gate model: $gate_alias ($provider $model)"
+    echo
+    echo "Objective checks: PHP lint $([[ "$lint_ok" == 1 ]] && echo PASS || echo FAIL)"
+    if [[ -n "$markers" ]]; then
+      echo
+      echo "Added [VERIFY]/TODO markers:"
+      printf '%s\n' "$markers"
+    fi
+    echo
+    printf '%s\n' "$model_output"
+  } > "$gate_file"
+  trap - RETURN
+  rm -rf "$scratch"
+
+  if [[ "$verdict" == "APPROVE" ]]; then
+    echo "gate #$n: APPROVE — opening PR"
+    cmd_pr "$n"
+  else
+    ( cd "$root" && gh issue comment "$n" --body-file "$gate_file" ) >/dev/null \
+      || die "gate #$n: REJECT (saved $gate_file, but issue comment failed)"
+    echo "gate #$n: REJECT — held (findings: $gate_file)"
   fi
 }
 
@@ -688,6 +830,7 @@ main() {
     wait)   cmd_wait "$@" ;;
     logs)   cmd_logs "$@" ;;
     stop)   cmd_stop "$@" ;;
+    gate)   cmd_gate "$@" ;;
     pr)     cmd_pr "$@" ;;
     clean)  cmd_clean "$@" ;;
     notify) cmd_notify "$@" ;;

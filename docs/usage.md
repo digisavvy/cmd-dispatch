@@ -45,7 +45,7 @@ Checks core dependencies, reports Codex, Claude, and Gemini paths/versions in a 
 dispatch doctor
 ```
 
-### `dispatch start <issue#> <model> [-R repo]`
+### `dispatch start <issue#> <model> [-R repo] [--gate] [--gate-model alias]`
 
 Starts one worker for one GitHub issue. `dispatch` fetches the issue title/body with `gh issue view`, creates a worktree at `../<repo>-wt-issue-<n>`, creates branch `dispatch/issue-<n>`, writes job state under `.dispatch/jobs/<n>/`, and launches the selected provider CLI with `nohup`.
 
@@ -56,9 +56,13 @@ dispatch start 41 5.6
 dispatch start 52 mini
 dispatch start 57 gpt-5.6-terra
 dispatch start 41 5.6 -R /path/to/target-repo
+dispatch start 42 5.6 --gate --gate-model opus
 ```
 
 Only one job directory may exist per issue. To redo an issue, stop or clean the existing job first.
+The automatic merge gate is off by default. `--gate` runs it in the background after a successful
+worker exit. `--gate-model` selects its model alias and defaults to `opus`; it is only valid with
+`--gate`.
 
 ### `dispatch usage [--json] [--probe|--live]`
 
@@ -149,6 +153,20 @@ dispatch pr 41
 ```
 
 Run this only after the foreman has reviewed the worker's commit. The command refuses to continue if tracked files in the worktree have unstaged or staged changes. Untracked files do not block it.
+
+### `dispatch gate <issue#> [--gate-model alias]`
+
+Runs a strict headless review of a `DONE` job using `opus` by default. It gathers the issue, worker
+message, and committed diff, checks changed PHP files with `php -l`, and flags added `[VERIFY]` and
+`TODO` markers. Full findings are saved to `.dispatch/jobs/<n>/gate.md`.
+
+An approval calls `dispatch pr`, which pushes and opens a PR but does not merge it. A rejection or
+PHP lint failure holds the job and posts the findings as an issue comment.
+
+```sh
+dispatch gate 41
+dispatch gate 41 --gate-model 5.6
+```
 
 ### `dispatch clean <issue#>`
 

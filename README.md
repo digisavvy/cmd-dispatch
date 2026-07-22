@@ -25,7 +25,8 @@ you ── talk ──▶ Claude Code (foreman)
       │            │            │
       └── commit (never push) ──┘
                    ▼
-         foreman reviews diff → dispatch pr <n>   ← you are the merge gate
+         foreman reviews diff → dispatch pr <n>   ← manual gate (default)
+              or opt-in headless review → PR or hold
 ```
 
 State lives in `<target-repo>/.dispatch/` (add it to `.gitignore`), so "who's on what" survives crashes
@@ -59,6 +60,8 @@ Or drive the CLI directly:
 
 ```sh
 dispatch start 41 5.6         # spawn a worker
+dispatch start 42 5.6 --gate  # opt in: review on completion, opening a PR only if approved
+dispatch gate 41              # gate a finished job now (default reviewer: opus)
 dispatch status               # RUNNING / DONE / FAILED / KILLED + last event / final message
 dispatch usage                # subscription usage bars and reset windows
 dispatch logs 41 -f           # tail live output
@@ -97,7 +100,8 @@ if installed, else `osascript`). The message names the **next human action**:
 ## Design notes / limits
 
 - **Subscription auth, no API keys.** dispatch shells out to `codex`, which holds its own login.
-- **Merge gate is you.** Workers commit but never push or PR. Nothing lands without lead review.
+- **The merge gate is manual by default.** `--gate` or `dispatch gate` opts into a headless review;
+  approval opens a PR but never merges it. Select the reviewer with `--gate-model <alias>`.
 - **Model strings drift** — that's why they're aliases in `models.conf`, resolved at runtime, never
   hardcoded. Re-run `dispatch doctor` after Codex upgrades.
 - **`--full-auto` is deprecated** in current Codex; this uses the explicit `--sandbox workspace-write`.
