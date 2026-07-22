@@ -72,6 +72,15 @@ Happy with it? Open the PR:
 dispatch pr 41                  # pushes the branch, opens a PR that closes #41
 ```
 
+Optionally, ask a headless reviewer to gate a finished job. This is off by default; approval opens
+a PR (it never merges), while rejection holds the job and records findings in `gate.md`:
+
+```
+dispatch gate 41                       # opus by default
+dispatch start 42 5.6 --gate           # gate automatically when the worker succeeds
+dispatch start 43 5.6 --gate --gate-model 5.6
+```
+
 Not happy? Don't merge — redo it with better guidance (see steering).
 
 ## Steer mid-flight
