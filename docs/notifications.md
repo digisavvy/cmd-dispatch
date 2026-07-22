@@ -22,12 +22,14 @@ Default actions are:
 - `STALLED`: `may be stuck / awaiting something — check: dispatch logs <n> -f`
 
 Every notification attempts a terminal bell. On macOS it also uses `terminal-notifier`, or
-`osascript` when `terminal-notifier` is unavailable. If `DISPATCH_NOTIFY_CMD` is set, dispatch runs
-that command with three arguments: issue number, state, and the full payload.
+`osascript` when `terminal-notifier` is unavailable. If `DISPATCH_NOTIFY_CMD` names a trusted local
+executable, dispatch runs it with three arguments: issue number, state, and the full payload. Use a
+wrapper script when fixed flags are needed.
 
 The hook also receives `DISPATCH_ISSUE`, `DISPATCH_STATE`, `DISPATCH_PROVIDER`, `DISPATCH_MODEL`,
 `DISPATCH_REPO`, `DISPATCH_REPO_ROOT`, `DISPATCH_NEXT_ACTION`, `DISPATCH_PR_URL`, and
-`DISPATCH_MESSAGE`. Hook failures are ignored. Set `DISPATCH_NOTIFY=off` to disable every channel.
+`DISPATCH_MESSAGE`. Treat these values as untrusted data. Hook failures are ignored. Set
+`DISPATCH_NOTIFY=off` to disable every channel.
 
 ## ntfy hook
 

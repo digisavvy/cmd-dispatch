@@ -209,7 +209,7 @@ Channels (all best-effort, never blocking):
 
 - **Terminal bell** on the controlling terminal, if the session still has one.
 - **macOS banner** on Darwin: `terminal-notifier` when installed, `osascript` otherwise.
-- **`DISPATCH_NOTIFY_CMD`** — when set, the command runs with the headline as args
+- **`DISPATCH_NOTIFY_CMD`** — when set to one trusted local executable, it runs with the headline as args
   (`<issue#> <state> <payload>`) and the full job context in env:
 
   | Env var | Value |
@@ -222,7 +222,9 @@ Channels (all best-effort, never blocking):
   | `DISPATCH_PR_URL` | PR url when a gate opened one (empty otherwise) |
   | `DISPATCH_MESSAGE` | the full payload line |
 
-  Keep the hook fast — it runs synchronously, after the exit code is on disk.
+  Keep the hook fast — it runs synchronously, after the exit code is on disk. Use a wrapper script
+  when fixed command-line flags are needed, and treat all arguments and environment values as
+  untrusted data.
 - **`DISPATCH_NOTIFY=off`** disables every channel.
 
 ## `/dispatch` Slash Command
