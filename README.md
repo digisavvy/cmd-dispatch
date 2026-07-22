@@ -3,8 +3,7 @@
 When Anthropic decided to make Fable available but at 50% usage levels it made me wonder: How can I most benefit from Fable's awesomeness? Enter cmd-dispatch, A thin **conversational foreman** for coding agents. You talk to a lead agent (Claude Code / Fable)
 and say *"put sonnet on #41, 5.6 on the other two"* — it spawns one headless **Codex or Claude** worker
 per GitHub issue, using the provider implied by the model alias. Each gets its own git worktree/branch,
-and the lead
-reviews before anything merges.
+and the lead reviews before anything merges. We can use the merge gate of our choice to determine tasks and what's done and what gets merged. The idea is that the most capable agent sets the tone and verifies the work before merging it in.
 
 This is deliberately **not** a framework. It's a small CLI (`bin/dispatch`) plus a slash command
 (`/dispatch`). The conversational steering — *"kill #52, give it to 5.6"* — is the whole point; the moment
