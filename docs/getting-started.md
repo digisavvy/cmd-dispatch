@@ -55,7 +55,9 @@ dispatch logs 41 -f --events    # live-tail what the worker is actually doing
 ```
 
 `dispatch wait` is the one to lean on — it returns the moment the worker is done (exit code
-mirrors the job), so you're not guessing when to check back.
+mirrors the job), so you're not guessing when to check back. Finishing or failing jobs also
+ping you: terminal bell + macOS banner, or anything you wire into `DISPATCH_NOTIFY_CMD`
+(`DISPATCH_NOTIFY=off` silences it).
 
 ## Land it (you're the merge gate)
 

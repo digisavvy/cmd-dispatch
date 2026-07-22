@@ -26,7 +26,7 @@ The `--add-dir` path points at the repository's Git common directory so the work
 
 Claude runs with the worktree as cwd, stream JSON, `--add-dir "$gitcommon"`, and `--dangerously-skip-permissions`; the isolated worktree and foreman review provide the same trust boundary. Gemini has an unverified runner template only.
 
-The shell pid from the background `nohup bash "$jobdir/run.sh"` process is written to `pid`. When `codex exec` exits, `run.sh` writes the exit code to `exitcode`.
+The shell pid from the background `nohup bash "$jobdir/run.sh"` process is written to `pid`. When `codex exec` exits, `run.sh` writes the exit code to `exitcode`, then calls `dispatch notify <n> <state> -R <repo>` through the resolved dispatch bin. The notification (terminal bell, macOS banner, optional `DISPATCH_NOTIFY_CMD` hook) fires only after `exitcode` is on disk, so a wedged channel can never block the worker or the foreman's polling loop. See [usage.md](usage.md) for the payload and channels.
 
 ## Event Streams
 

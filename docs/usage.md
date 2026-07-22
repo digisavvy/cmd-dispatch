@@ -160,6 +160,50 @@ dispatch clean 52
 
 This is the reset path for reassigning or starting over on an issue.
 
+### `dispatch notify <issue#> <state> [next-action...] [-R repo]`
+
+Pushes a human notification for a job that reached an attention state. The generated `run.sh`
+calls this automatically right after writing `exitcode` — you normally never run it by hand,
+but it is also the integration point for anything that detects attention states itself (the
+STALLED detector from issue #13 calls it with `STALLED`; the auto-gate from issue #15 passes
+its verdict as the message).
+
+```sh
+dispatch notify 41 DONE
+dispatch notify 52 FAILED\(1\)
+dispatch notify 41 DONE "gate APPROVED — PR #45 open"
+```
+
+The payload is one line naming the **next human action**:
+
+```text
+[dispatch] #<n> <state> — <model> on <repo>. Next: <action>
+```
+
+With no explicit `next-action`, a default is chosen per state: `DONE` → `review & merge:
+dispatch pr <n>`; `FAILED(code)` → `worker errored — inspect: dispatch logs <n>`; `STALLED` →
+`may be stuck / awaiting something — check: dispatch logs <n> -f`.
+
+Channels (all best-effort, never blocking):
+
+- **Terminal bell** on the controlling terminal, if the session still has one.
+- **macOS banner** on Darwin: `terminal-notifier` when installed, `osascript` otherwise.
+- **`DISPATCH_NOTIFY_CMD`** — when set, the command runs with the headline as args
+  (`<issue#> <state> <payload>`) and the full job context in env:
+
+  | Env var | Value |
+  |---|---|
+  | `DISPATCH_ISSUE` | issue number |
+  | `DISPATCH_STATE` | `DONE`, `FAILED(code)`, `STALLED`, ... |
+  | `DISPATCH_PROVIDER` / `DISPATCH_MODEL` | resolved worker identity |
+  | `DISPATCH_REPO` / `DISPATCH_REPO_ROOT` | repo name / absolute path |
+  | `DISPATCH_NEXT_ACTION` | the human next step |
+  | `DISPATCH_PR_URL` | PR url when a gate opened one (empty otherwise) |
+  | `DISPATCH_MESSAGE` | the full payload line |
+
+  Keep the hook fast — it runs synchronously, after the exit code is on disk.
+- **`DISPATCH_NOTIFY=off`** disables every channel.
+
 ## `/dispatch` Slash Command
 
 `install.sh` installs `commands/dispatch.md` as the Claude Code `/dispatch` command. The slash command tells the lead agent to parse natural-language assignments and call the CLI.

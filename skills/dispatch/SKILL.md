@@ -44,6 +44,9 @@ shows which provider CLIs are installed.
 - `dispatch usage [--probe]` — subscription usage % + reset windows (codex live; claude reset via `--probe`).
 - `dispatch wait --any` — block until any active job finishes.
 - `dispatch logs <n> --events` — rendered event stream (not just stderr).
+- Jobs ping the human on `DONE`/`FAILED` automatically (terminal bell + macOS banner, after the
+  exit code lands). `DISPATCH_NOTIFY_CMD` routes the ping to Slack/ntfy/etc.; `DISPATCH_NOTIFY=off`
+  silences it. When a notification says "Next: review & merge", do the review step below.
 
 ## Rules of thumb
 
