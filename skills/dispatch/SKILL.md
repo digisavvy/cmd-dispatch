@@ -20,7 +20,8 @@ Don't use it for a change you should just make directly, or for non-code issues 
 1. **Run from inside the target repo** (the one with the issues) — it needs a local git clone.
 2. **Dispatch:** `dispatch start <issue#> <alias>` (or `/dispatch put 5.6 on #41, sonnet on #42`).
 3. **Watch:** `dispatch status` · `dispatch wait <n>` (blocks until done) · `dispatch logs <n> -f --events`.
-4. **Review (merge gate):** read the diff in the worktree + the worker's final message.
+4. **Review (merge gate):** read the diff in the worktree + the worker's final message. Optionally
+   run `dispatch gate <n> [--gate-model <alias>]` for a headless review.
 5. **Land:** `dispatch pr <n>` (pushes branch, opens PR). Never PR a FAILED job or unreviewed work.
 6. **Steer/tidy:** `dispatch stop <n>` · reassign = `dispatch clean <n> && dispatch start <n> <alias>`.
 
@@ -44,6 +45,9 @@ shows which provider CLIs are installed.
 - `dispatch usage [--probe]` — subscription usage % + reset windows (codex live; claude reset via `--probe`).
 - `dispatch wait --any` — block until any active job finishes.
 - `dispatch logs <n> --events` — rendered event stream (not just stderr).
+- `dispatch gate <n> [--gate-model <alias>]` — opt-in headless review (default `opus`); approval
+  opens a PR but never merges, rejection holds and reports findings.
+- `dispatch start <n> <alias> --gate [--gate-model <alias>]` — opt into that gate on completion.
 
 ## Rules of thumb
 
