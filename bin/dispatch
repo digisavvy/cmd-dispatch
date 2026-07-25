@@ -724,10 +724,10 @@ cmd_notify() {
   # macOS native banner: terminal-notifier when installed, osascript otherwise.
   if [[ "$(uname -s)" == "Darwin" ]]; then
     if command -v terminal-notifier >/dev/null 2>&1; then
-      terminal-notifier -title "dispatch" -message "$payload" >/dev/null 2>&1 || true
+      terminal-notifier -title "dispatch" -message "$payload" -sound default >/dev/null 2>&1 || true
     elif command -v osascript >/dev/null 2>&1; then
       esc="${payload//\\/\\\\}"; esc="${esc//\"/\\\"}"
-      osascript -e "display notification \"$esc\" with title \"dispatch\"" >/dev/null 2>&1 || true
+      osascript -e "display notification \"$esc\" with title \"dispatch\" sound name \"Ping\"" >/dev/null 2>&1 || true
     fi
   fi
 
