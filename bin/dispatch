@@ -41,6 +41,17 @@ now() { date -u +%FT%TZ; }
 
 need() { command -v "$1" >/dev/null 2>&1 || die "'$1' not found on PATH${2:+ — $2}"; }
 
+_timeout=""
+if command -v timeout >/dev/null 2>&1; then
+  _timeout="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+  _timeout="gtimeout"
+fi
+
+need_timeout() {
+  [[ -n "$_timeout" ]] || die "'timeout' or 'gtimeout' not found on PATH — install GNU coreutils with: brew install coreutils"
+}
+
 validate_issue() {
   [[ "${1:-}" =~ ^[0-9]+$ ]] || die "issue# must be a number, got '${1:-}'"
 }
@@ -172,9 +183,15 @@ cmd_doctor() {
   local ok=1
   echo "dispatch $VERSION — doctor"
   echo
-  for t in git gh jq timeout; do
+  for t in git gh jq; do
     if command -v "$t" >/dev/null 2>&1; then echo "  ok   $t ($($t --version 2>/dev/null | head -1))"; else echo "  MISS $t"; ok=0; fi
   done
+  if [[ -n "$_timeout" ]]; then
+    echo "  ok   $_timeout ($("$_timeout" --version 2>/dev/null | head -1))"
+  else
+    echo "  MISS timeout or gtimeout (install with: brew install coreutils)"
+    ok=0
+  fi
   echo
   echo "Providers:"
   local provider path version
@@ -555,18 +572,18 @@ run_gate_model() { # run_gate_model <provider> <model> <worktree> <prompt-file> 
   local gate_timeout="${DISPATCH_GATE_TIMEOUT:-900}"
   case "$provider" in
     codex)
-      timeout "$gate_timeout" codex exec -C "$wt" -m "$model" --sandbox read-only \
+      "$_timeout" "$gate_timeout" codex exec -C "$wt" -m "$model" --sandbox read-only \
         -o "$scratch/result.txt" "$(cat "$prompt_file")" >/dev/null 2>"$scratch/stderr.log" || ec=$?
       cat "$scratch/result.txt" 2>/dev/null || true
       ;;
     claude)
-      ( cd "$wt" && timeout "$gate_timeout" claude -p "$(cat "$prompt_file")" --model "$model" \
+      ( cd "$wt" && "$_timeout" "$gate_timeout" claude -p "$(cat "$prompt_file")" --model "$model" \
           --output-format stream-json --verbose ) >"$scratch/events.jsonl" 2>"$scratch/stderr.log" || ec=$?
       jq -rs '[.[] | select(.type=="result") | .result // .text // empty] | last // empty' \
         "$scratch/events.jsonl" 2>/dev/null
       ;;
     kimi)
-      ( cd "$wt" && timeout "$gate_timeout" kimi -p "$(cat "$prompt_file")" -m "$model" ) \
+      ( cd "$wt" && "$_timeout" "$gate_timeout" kimi -p "$(cat "$prompt_file")" -m "$model" ) \
         >"$scratch/result.txt" 2>"$scratch/stderr.log" || ec=$?
       cat "$scratch/result.txt" 2>/dev/null || true
       ;;
@@ -645,6 +662,7 @@ cmd_gate() {
 
   resolved="$(resolve_model "$gate_alias")"; read -r provider model <<< "$resolved"
   command -v "$provider" >/dev/null 2>&1 || die "$provider not installed"
+  need_timeout
   issue_json="$(cd "$root" && gh issue view "$n" --json title,body 2>/dev/null)" \
     || die "could not fetch issue #$n via gh"
   title="$(printf '%s\n' "$issue_json" | jq -r '.title')"
@@ -678,14 +696,13 @@ cmd_gate() {
   fi
   verify_output=""
   if [[ "$lint_ok" == 1 && -n "$verify_hook" ]]; then
-    need timeout
     if [[ "$verify_label" == ".dispatch/verify.sh" ]]; then
       if ! verify_output="$(cd "$wt" && DISPATCH_BASE_SHA="$base" DISPATCH_ISSUE="$n" \
-        timeout "${DISPATCH_VERIFY_TIMEOUT:-600}" "$verify_hook" 2>&1)"; then
+        "$_timeout" "${DISPATCH_VERIFY_TIMEOUT:-600}" "$verify_hook" 2>&1)"; then
         verify_ok=0
       fi
     elif ! verify_output="$(cd "$wt" && DISPATCH_BASE_SHA="$base" DISPATCH_ISSUE="$n" \
-      timeout "${DISPATCH_VERIFY_TIMEOUT:-600}" bash -c "$verify_hook" 2>&1)"; then
+      "$_timeout" "${DISPATCH_VERIFY_TIMEOUT:-600}" bash -c "$verify_hook" 2>&1)"; then
       verify_ok=0
     fi
     verify_status="$([[ "$verify_ok" == 1 ]] && echo PASS || echo FAIL)"
