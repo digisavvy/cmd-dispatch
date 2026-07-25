@@ -7,6 +7,10 @@ Each generated `run.sh` writes the worker's `exitcode`, then calls `dispatch not
 does not itself send a notification; a caller that wants a stalled alert must invoke
 `dispatch notify <issue#> STALLED`.
 
+The merge gate sends its own notifications on every verdict: `APPROVE` (with the PR URL),
+`REJECT` (pointing at the saved report), and `REWORK` when a rejection is fed back to the worker
+for another attempt (see [gate.md](gate.md)).
+
 ## Payload and channels
 
 The payload names the job and next action:
@@ -21,14 +25,17 @@ Default actions are:
 - `FAILED(code)`: `worker errored — inspect: dispatch logs <n>`
 - `STALLED`: `may be stuck / awaiting something — check: dispatch logs <n> -f`
 
+Gate notifications pass their own action text (the PR URL on `APPROVE`, the report path on
+`REJECT`, the attempt count on `REWORK`).
+
 Every notification attempts a terminal bell. On macOS it also uses `terminal-notifier`, or
 `osascript` when `terminal-notifier` is unavailable. If `DISPATCH_NOTIFY_CMD` names a trusted local
 executable, dispatch runs it with three arguments: issue number, state, and the full payload. Use a
 wrapper script when fixed flags are needed.
 
 The hook also receives `DISPATCH_ISSUE`, `DISPATCH_STATE`, `DISPATCH_PROVIDER`, `DISPATCH_MODEL`,
-`DISPATCH_REPO`, `DISPATCH_REPO_ROOT`, `DISPATCH_NEXT_ACTION`, `DISPATCH_PR_URL`, and
-`DISPATCH_MESSAGE`. Treat these values as untrusted data. Hook failures are ignored. Set
+`DISPATCH_REPO`, `DISPATCH_REPO_ROOT`, `DISPATCH_NEXT_ACTION`, `DISPATCH_PR_URL` (written by
+`dispatch pr`, empty until a PR exists), and `DISPATCH_MESSAGE`. Treat these values as untrusted data. Hook failures are ignored. Set
 `DISPATCH_NOTIFY=off` to disable every channel.
 
 ## ntfy hook

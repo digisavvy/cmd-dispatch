@@ -1,7 +1,7 @@
 # Merge gate
 
-The headless merge gate is opt-in. It reviews one completed worker commit and either opens a pull
-request or holds the job. It never merges.
+The headless merge gate is opt-in. It reviews everything a completed worker committed and either
+opens a pull request or holds the job. It never merges.
 
 Run it for an existing job:
 
@@ -48,6 +48,12 @@ VERDICT: REJECT
 A missing or malformed verdict, reviewer error, PHP lint failure, or verification-hook failure is
 a rejection.
 
+The reviewer call runs under `timeout "${DISPATCH_GATE_TIMEOUT:-900}"`, so a wedged reviewer
+becomes a rejection instead of a silent hang. The review prompt is hardened against two known
+failure modes: the issue body is wrapped in `<untrusted-issue-body>` tags so hostile issue text
+cannot instruct the reviewer, and the worker's final message appears last, labeled an unverified
+claim, so the maker's self-assessment cannot prime the checker.
+
 ## Outcomes
 
 - `APPROVE` runs `dispatch pr <issue#>`, which pushes the worker branch and opens a pull request.
@@ -55,8 +61,10 @@ a rejection.
 - `REJECT` holds the job, writes the full report to `.dispatch/jobs/<issue#>/gate.md`, and posts
   that report as a GitHub issue comment — unless the job has a rework attempt left (below).
 
-The report is written for both outcomes. A job must already be `DONE`; `RUNNING`, `STALLED`,
-`FAILED(code)`, and `KILLED` jobs are refused.
+The report is written for both outcomes, and both outcomes send a notification (see
+[notifications.md](notifications.md)): `APPROVE` includes the PR URL, `REJECT` points at the
+report. A job must already be `DONE`; `RUNNING`, `STALLED`, `FAILED(code)`, and `KILLED` jobs are
+refused.
 
 ## Bounded rework
 

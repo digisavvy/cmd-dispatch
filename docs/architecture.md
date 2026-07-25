@@ -84,7 +84,7 @@ temp file: a read takes the first matching line, so appending would leave the st
 to the base on the first attempt, and rebuilt as base plus the latest rejection report on each
 rework round, so feedback never stacks. See [gate.md](gate.md).
 
-`exitcode` is absent while the process is running. A value of `0` means `DONE`; any nonzero value means `FAILED(code)`. `dispatch stop` writes `killed`, which appears as `FAILED(killed)` because the state logic treats only `0` as done.
+`exitcode` is absent while the process is running. A value of `0` means `DONE`; any other numeric value means `FAILED(code)`. `dispatch stop` writes the sentinel `killed`, which reports as `KILLED`.
 
 ## Merge Gate
 
