@@ -123,7 +123,7 @@ States are:
 - `STALLED` when a running job's newest event is at least five minutes old
 - `DONE` when `exitcode` exists and is `0`
 - `FAILED(code)` when `exitcode` exists and is nonzero
-- `KILLED` when there is no exit code and the recorded pid is not alive
+- `KILLED` when `exitcode` is `killed` (written by `dispatch stop`), or when there is no exit code and the recorded pid is not alive
 
 For a single issue, status also prints the worktree path. `STALLED` is a heuristic, not a failure; some legitimate tasks are quiet during a long tool call. Use `--stale-after` to change the threshold in seconds.
 
@@ -155,7 +155,7 @@ dispatch logs 41 --events
 
 ### `dispatch stop <issue#>`
 
-Kills a running worker process, writes `killed` to `exitcode`, appends a stop entry to `.dispatch/ledger.log`, and keeps the worktree.
+Kills a running worker process, writes `killed` to `exitcode` (the job then reports `KILLED`), appends a stop entry to `.dispatch/ledger.log`, and keeps the worktree.
 
 ```sh
 dispatch stop 52
