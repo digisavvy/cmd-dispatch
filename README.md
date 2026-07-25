@@ -61,6 +61,7 @@ Or drive the CLI directly:
 dispatch start 41 5.6         # spawn a worker
 dispatch start 42 5.6 --gate  # opt in: review on completion, opening a PR only if approved
 dispatch gate 41              # gate a finished job now (default reviewer: opus)
+dispatch rework 41            # send a gate REJECT back to the worker (needs --max-attempts > 1)
 dispatch status               # RUNNING / DONE / FAILED / KILLED + last event / final message
 dispatch usage                # subscription usage bars and reset windows
 dispatch logs 41 -f           # tail live output
@@ -106,6 +107,8 @@ if installed, else `osascript`). The message names the **next human action**:
 - **Subscription auth, no API keys.** dispatch shells out to `codex`, which holds its own login.
 - **The merge gate is manual by default.** `--gate` or `dispatch gate` opts into a headless review;
   approval opens a PR but never merges it. Select the reviewer with `--gate-model <alias>`.
+- **Rework is bounded and opt-in.** `--max-attempts N` (max 3, requires `--gate`) lets a rejection
+  re-run the same worker with the findings appended; the last attempt holds as usual.
 - **Model strings drift** — that's why they're aliases in `models.conf`, resolved at runtime, never
   hardcoded. Re-run `dispatch doctor` after Codex upgrades.
 - **`--full-auto` is deprecated** in current Codex; this uses the explicit `--sandbox workspace-write`.

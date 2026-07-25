@@ -53,7 +53,39 @@ a rejection.
 - `APPROVE` runs `dispatch pr <issue#>`, which pushes the worker branch and opens a pull request.
   It does not merge the pull request.
 - `REJECT` holds the job, writes the full report to `.dispatch/jobs/<issue#>/gate.md`, and posts
-  that report as a GitHub issue comment.
+  that report as a GitHub issue comment — unless the job has a rework attempt left (below).
 
 The report is written for both outcomes. A job must already be `DONE`; `RUNNING`, `STALLED`,
 `FAILED(code)`, and `KILLED` jobs are refused.
+
+## Bounded rework
+
+A rejection can be sent back to the same worker instead of held, once per remaining attempt:
+
+```sh
+dispatch start <issue#> <model> --gate --max-attempts 2
+dispatch rework <issue#> [--gate-model <alias>]
+```
+
+`--max-attempts` defaults to `1` — no rework, exactly the behavior above — accepts at most `3`, and
+requires `--gate`. `meta` tracks `attempt` and `max_attempts`, and gate ledger lines carry
+`attempt=<n>`.
+
+When the gate rejects a job that opted in and still has an attempt left, it appends
+`<ts> rework issue=<n> attempt=<m>` to the ledger, notifies `REWORK`, and re-runs the same worker in
+the same worktree. On the last attempt it holds, comments, and notifies exactly as it always has.
+
+Each round:
+
+- `gate.md`, `last_message.txt`, `events.jsonl`, `worker.log`, and `exitcode` move to
+  `.dispatch/jobs/<issue#>/attempts/<attempt>/` before the rerun overwrites them
+- `prompt.txt` is rebuilt as `prompt.base.txt` plus the rejection report wrapped in
+  `<untrusted-review-feedback>` tags, so feedback never stacks across rounds
+- the worker is told to address every finding, keep the same scope rules, fix forward in a new
+  commit (no amend, rebase, or force-push), and to stop and say so if a finding is wrong
+
+`dispatch rework <issue#>` is the manual entry point to the same machinery. It requires a job that
+is `DONE`, has its worktree, has a `gate.md` containing `VERDICT: REJECT`, and has
+`attempt < max_attempts`; `--gate-model` changes the reviewer for the next round. A job with
+`max_attempts=1` — including every job started before rework existed — can never enter rework.
+Rework after `FAILED` is not supported: a crashed worker has no gate report to feed back.
