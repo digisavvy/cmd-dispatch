@@ -176,10 +176,13 @@ Run this only after the foreman has reviewed the worker's commit. The command re
 
 Runs a strict headless review of a `DONE` job using `opus` by default. It gathers the issue, worker
 message, and committed diff, checks changed PHP files with `php -l`, and flags added `[VERIFY]` and
-`TODO` markers. Full findings are saved to `.dispatch/jobs/<n>/gate.md`.
+`TODO` markers. After lint, it runs the executable `.dispatch/verify.sh` from the main checkout, or
+`$DISPATCH_VERIFY_CMD` when no executable script exists. The hook runs from the worker worktree
+with `DISPATCH_BASE_SHA` and `DISPATCH_ISSUE` set and a default 600-second timeout, configurable
+with `DISPATCH_VERIFY_TIMEOUT`. Full findings are saved to `.dispatch/jobs/<n>/gate.md`.
 
 An approval calls `dispatch pr`, which pushes and opens a PR but does not merge it. A rejection or
-PHP lint failure holds the job and posts the findings as an issue comment.
+objective-check failure holds the job and posts the findings as an issue comment.
 
 ```sh
 dispatch gate 41

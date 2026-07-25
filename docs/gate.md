@@ -30,6 +30,14 @@ it applies `php -l` to each changed, existing PHP file. A PHP lint failure rejec
 without running the reviewer. Added `[VERIFY]` and `TODO` lines are also included in the review
 prompt and saved report.
 
+After PHP lint, the gate runs an optional repository verification hook. An executable
+`.dispatch/verify.sh` in the main checkout takes precedence; otherwise, the gate runs
+`$DISPATCH_VERIFY_CMD` through Bash when that variable is set. The hook runs with the worker
+worktree as its current directory, under `timeout "${DISPATCH_VERIFY_TIMEOUT:-600}"`, and receives
+`DISPATCH_BASE_SHA` and `DISPATCH_ISSUE` in its environment. A non-zero exit rejects immediately,
+saves the hook output verbatim in `gate.md`, and skips the reviewer. With no configured hook,
+`gate.md` explicitly reports `Verify hook: none configured`.
+
 The reviewer must emit a complete line exactly matching one of:
 
 ```text
@@ -37,7 +45,8 @@ VERDICT: APPROVE
 VERDICT: REJECT
 ```
 
-A missing or malformed verdict, reviewer error, or PHP lint failure is a rejection.
+A missing or malformed verdict, reviewer error, PHP lint failure, or verification-hook failure is
+a rejection.
 
 ## Outcomes
 

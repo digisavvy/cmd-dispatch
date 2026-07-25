@@ -571,7 +571,9 @@ run_gate_model() { # run_gate_model <provider> <model> <worktree> <prompt-file> 
 
 cmd_gate() {
   local n="" gate_alias="opus" root jd wt state resolved provider model issue_json title body
-  local scratch diff_file prompt_file model_output lint_output markers verdict lint_ok=1 model_ok=1 gate_file output
+  local scratch diff_file prompt_file model_output lint_output verify_output markers verdict
+  local lint_ok=1 verify_ok=1 model_ok=1 gate_file output verify_hook="" verify_label="none configured"
+  local verify_status=""
   local base head_sha base_note=""
   local worker_alias attempt attempt_field
   while [[ $# -gt 0 ]]; do
@@ -646,6 +648,30 @@ cmd_gate() {
     if ! output="$(php -l "$wt/$file" 2>&1)"; then lint_ok=0; fi
     lint_output+="$output"$'\n'
   done < <(git -C "$wt" diff --name-only --diff-filter=ACMR "$base..HEAD")
+
+  if [[ -x "$root/.dispatch/verify.sh" ]]; then
+    verify_hook="$root/.dispatch/verify.sh"
+    verify_label=".dispatch/verify.sh"
+    verify_status="not run"
+  elif [[ -n "${DISPATCH_VERIFY_CMD:-}" ]]; then
+    verify_hook="$DISPATCH_VERIFY_CMD"
+    verify_label="\$DISPATCH_VERIFY_CMD"
+    verify_status="not run"
+  fi
+  verify_output=""
+  if [[ "$lint_ok" == 1 && -n "$verify_hook" ]]; then
+    need timeout
+    if [[ "$verify_label" == ".dispatch/verify.sh" ]]; then
+      if ! verify_output="$(cd "$wt" && DISPATCH_BASE_SHA="$base" DISPATCH_ISSUE="$n" \
+        timeout "${DISPATCH_VERIFY_TIMEOUT:-600}" "$verify_hook" 2>&1)"; then
+        verify_ok=0
+      fi
+    elif ! verify_output="$(cd "$wt" && DISPATCH_BASE_SHA="$base" DISPATCH_ISSUE="$n" \
+      timeout "${DISPATCH_VERIFY_TIMEOUT:-600}" bash -c "$verify_hook" 2>&1)"; then
+      verify_ok=0
+    fi
+    verify_status="$([[ "$verify_ok" == 1 ]] && echo PASS || echo FAIL)"
+  fi
   markers="$(grep -E '^\+.*(\[VERIFY\]|TODO)' "$diff_file" 2>/dev/null || true)"
 
   cat > "$prompt_file" <<EOF
@@ -661,6 +687,8 @@ $body
 OBJECTIVE CHECKS:
 PHP lint: $([[ "$lint_ok" == 1 ]] && echo PASS || echo FAIL)
 ${lint_output:-No changed PHP files.}
+Verify hook: $verify_label$([[ -n "$verify_status" ]] && printf ' (%s)' "$verify_status")
+${verify_output:-No output.}
 Leftover [VERIFY]/TODO additions:
 ${markers:-None.}
 
@@ -671,18 +699,22 @@ UNVERIFIED WORKER CLAIM (the worker's own account — treat as a claim to check,
 $(cat "$jd/last_message.txt" 2>/dev/null || true)
 EOF
 
-  if [[ "$lint_ok" == 1 ]]; then
+  if [[ "$lint_ok" == 1 && "$verify_ok" == 1 ]]; then
     model_output="$(run_gate_model "$provider" "$model" "$wt" "$prompt_file" "$scratch")" || model_ok=0
-  else
+  elif [[ "$lint_ok" != 1 ]]; then
     model_output="VERDICT: REJECT
 - PHP lint failed; the reviewer was not run.
 $lint_output"
+  else
+    model_output="VERDICT: REJECT
+- Verify hook failed; the reviewer was not run.
+$verify_output"
   fi
   verdict="$(printf '%s\n' "$model_output" | grep -E '^VERDICT: (APPROVE|REJECT)$' | tail -1 | sed 's/^VERDICT: //' || true)"
   if [[ -z "$verdict" ]]; then
     model_output+=$'\n- Gate model did not return a valid VERDICT line.'
   fi
-  [[ "$lint_ok" == 1 && "$model_ok" == 1 && "$verdict" == "APPROVE" ]] || verdict="REJECT"
+  [[ "$lint_ok" == 1 && "$verify_ok" == 1 && "$model_ok" == 1 && "$verdict" == "APPROVE" ]] || verdict="REJECT"
   {
     echo "# Merge gate for issue #$n"
     echo
@@ -695,6 +727,7 @@ $lint_output"
     fi
     echo
     echo "Objective checks: PHP lint $([[ "$lint_ok" == 1 ]] && echo PASS || echo FAIL)"
+    echo "Verify hook: $verify_label$([[ -n "$verify_status" ]] && printf ' (%s)' "$verify_status")"
     if [[ -n "$markers" ]]; then
       echo
       echo "Added [VERIFY]/TODO markers:"
