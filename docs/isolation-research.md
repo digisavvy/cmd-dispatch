@@ -9,6 +9,8 @@ without an OS policy, a child process retains the invoking user's filesystem and
 | Mechanism | OS | What it confines | Effort | Important caveats |
 | --- | --- | --- | --- | --- |
 | Claude permission modes and tool rules | macOS/Linux | Claude tool calls and approval decisions | Low | Application policy, not an OS boundary. A permitted `Bash` can reach everything the process can reach. `--allowedTools` pre-approves matches; by itself it is not an allowlist. |
+| Claude Code native Bash sandbox (`sandbox.enabled`) | macOS/Linux/WSL2 | OS-enforced (Seatbelt on macOS, Bubblewrap+socat on Linux) filesystem writes plus proxy-mediated network egress, for `Bash` commands and all their child processes | Low | Built into Claude Code; no extra install on macOS. `Bash`-only — the built-in Read/Edit/Write tools go through the permission system instead. The unsandboxed-retry escape hatch must be disabled (`allowUnsandboxedCommands: false`). The proxy allowlists client-supplied hostnames without TLS inspection, so domain fronting can evade it. |
+| Anthropic sandbox runtime (`srt`) | macOS/Linux (Windows experimental) | The whole wrapped process tree: generated Seatbelt profile (macOS) or Bubblewrap with network-namespace isolation (Linux), plus a local proxy for domain allowlisting | Low/medium | Wraps any CLI, so it fits Kimi, which has no native sandbox. Same primitives as Claude Code's built-in sandbox, packaged standalone (`npm install -g @anthropic-ai/sandbox-runtime`). Explicitly experimental; config lives in `~/.srt-settings.json` `[VERIFY]` whether a per-invocation config flag exists. |
 | Kimi permission rules/modes | macOS/Linux | Kimi built-in and MCP tool approvals | Low | Application policy, not an OS boundary. Prompt mode is unattended and permissive; rules can deny known tools but cannot confine a permitted shell process. |
 | Seatbelt via `sandbox-exec` | macOS | Kernel-enforced file operations, process operations, and network operations selected by a profile | Medium | Still used by current sandbox launchers, but its own man page marks it **DEPRECATED**. The profile language is not a supported public API, profiles are easy to under-specify, and OS/CLI updates can break them. |
 | Bubblewrap (`bwrap`) | Linux | Mount, user, PID, IPC, UTS, cgroup, and network namespaces; bind-mounted filesystem view | Medium | Lean and composable, but depends on usable user namespaces or a setuid installation. The host runtime, certificates, and an API egress path must be mounted deliberately. |
@@ -55,6 +57,47 @@ Consequences for dispatch:
   narrow command patterns are brittle for general coding work.
 - Tool deny rules are useful defense in depth, not filesystem or network confinement.
 
+### Claude Code native Bash sandbox (verified locally)
+
+Separate from permission modes, Claude Code ships an OS-enforced sandbox for the `Bash` tool
+([sandboxing docs](https://code.claude.com/docs/en/sandboxing)). It uses Seatbelt on macOS (nothing
+to install) and Bubblewrap plus `socat` on Linux/WSL2, and routes network egress through a proxy
+running outside the sandbox with a domain allowlist (`sandbox.network.allowedDomains`). Enabled via
+settings — including the `--settings` CLI flag, so dispatch can inject it per job without touching
+user or project config.
+
+Empirically verified on this host (Claude Code 2.1.170, macOS 26.3.1), headless:
+
+```sh
+cd /tmp/sbx-test && claude -p "touch ~/sbx_escape_test; curl https://example.com" \
+  --settings '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true}}' \
+  --permission-mode dontAsk
+```
+
+Result: the home-directory write failed with `Operation not permitted` (Seatbelt), the HTTPS request
+failed with a proxy `403` (no allowed domains configured), and no escape file was created. The
+worker still ran to completion and reported both failures — confinement without blocking on
+approval, which is exactly the unattended-worker requirement.
+
+Properties directly relevant to dispatch:
+
+- **Linked-worktree aware:** when the working directory is a linked Git worktree, the sandbox
+  auto-allows writes to the main repository's shared `.git` directory so `git commit` works, while
+  writes to `hooks/` and `config` inside it **remain denied**. That is strictly better than today's
+  `--add-dir "$gitcommon"`, which SECURITY.md flags as permitting hook/config persistence.
+- **Credential hygiene:** `sandbox.credentials` can deny reads of `~/.ssh`/`~/.aws` and unset or
+  mask secret environment variables for sandboxed commands.
+- **Fail closed:** `sandbox.failIfUnavailable: true` refuses to start rather than silently running
+  unsandboxed; `allowUnsandboxedCommands: false` disables the model's `dangerouslyDisableSandbox`
+  retry escape hatch.
+
+Caveats: only `Bash` and its children are sandboxed — the built-in Read/Edit/Write tools use the
+permission system, so the sandbox must be paired with a non-bypass permission mode (`acceptEdits`
+scopes edits to the working and `--add-dir` directories; `--dangerously-skip-permissions` would let
+the Edit tool write anywhere). The proxy makes allow decisions from the client-supplied hostname
+without terminating TLS by default, so a hostile worker could attempt domain fronting; Anthropic
+documents this limitation explicitly.
+
 ### Kimi Code CLI
 
 Locally verified against `kimi --help`, Kimi Code CLI 0.28.1:
@@ -78,6 +121,15 @@ Kimi's manual or plan modes can block waiting for approval and therefore do not 
 unattended worker. A generated deny-rule configuration could reduce the tool surface, but a general
 coding worker still needs write and command execution. As with Claude, Kimi rules do not constrain
 the OS privileges of an allowed command.
+
+Kimi has no native OS sandbox, so its confinement must be external. The leanest candidate is
+wrapping the whole `kimi -p …` invocation in Anthropic's
+[sandbox runtime](https://github.com/anthropic-experimental/sandbox-runtime)
+(`srt "kimi -p …"`), which applies the same Seatbelt/Bubblewrap-plus-proxy primitives as Claude
+Code's built-in sandbox to an arbitrary process tree, including domain allowlisting for the
+Moonshot API endpoint. `[VERIFY]` srt is experimental and untested against Kimi here: the git
+common directory must be added to `allowWrite`, and Kimi's API/auth traffic must work through
+srt's proxy. The fallback is a hand-rolled `sandbox-exec` profile (next section).
 
 ## macOS Seatbelt feasibility
 
@@ -157,6 +209,11 @@ a model prompt. The strongest lean control is therefore both a filesystem read b
 are not visible) and mediated egress. Network denial alone is insufficient once any model channel
 is reopened.
 
+Note that the broker described above does not need to be built from scratch: Claude Code's native
+sandbox and srt both ship it — a local proxy outside the sandbox that is the only permitted egress
+path, enforcing a domain allowlist. Its limitation is that the allowlist is hostname-based without
+TLS inspection by default, so it raises the bar rather than closing exfiltration entirely.
+
 On Linux, a loopback-only/new network namespace can connect to a deliberately injected proxy via a
 Unix socket or configured namespace link while having no default route. `[VERIFY]` The exact proxy
 transport must be prototyped against Claude and Kimi authentication/API behavior; neither installed
@@ -168,22 +225,46 @@ Do not present per-CLI permission flags as the security boundary. For untrusted 
 layered, opt-in `restricted` worker mode and fail closed when its OS launcher or policy tests are
 unavailable:
 
-1. **Immediate defense in depth:** replace Claude's bypass mode in restricted runs with
-   `--permission-mode dontAsk` plus an explicit tool policy. Generate Kimi permission rules for the
-   job rather than inheriting user/project rules. Disable unneeded MCP/plugin/config discovery for
-   both CLIs where verified controls exist. This reduces accidental capability but will require
-   provider-specific tuning to preserve general coding behavior.
-2. **macOS pilot:** wrap the complete worker process in a generated Seatbelt profile. First ship
+1. **Claude workers — adopt the native sandbox (verified, lowest effort):** drop
+   `--dangerously-skip-permissions` and run with `--permission-mode acceptEdits` plus an injected
+   `--settings` JSON enabling the sandbox. Sketch of the changed invocation in `run.sh`:
+
+   ```sh
+   claude -p "$(cat prompt.txt)" --model "$model" \
+     --output-format stream-json --verbose --add-dir "$gitcommon" \
+     --permission-mode acceptEdits \
+     --settings '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,
+       "failIfUnavailable":true,"allowUnsandboxedCommands":false,
+       "network":{"allowedDomains":[]},
+       "credentials":{"files":[{"path":"~/.ssh","mode":"deny"},
+                               {"path":"~/.aws","mode":"deny"}]}}}'
+   ```
+
+   Bash commands get OS-enforced write confinement (worktree + shared `.git` with `hooks/` and
+   `config` still denied) and zero network egress beyond Claude's own API channel, which runs in
+   the parent process outside the sandbox. `acceptEdits` keeps the Edit tool scoped to the worktree
+   and `--add-dir` paths without blocking headless runs. `[VERIFY]` before shipping: a full worker
+   run end-to-end (commit succeeds, no approval stall), and whether repositories whose builds need
+   package registries require entries in `allowedDomains`. This matches Codex's existing
+   `--sandbox workspace-write` trust model using the same OS primitives, at roughly a two-line diff.
+2. **Kimi workers — wrap in srt:** `srt "kimi -p …"` with allowWrite for the worktree and git
+   common directory and allowedDomains for the Moonshot API. `[VERIFY]` prototype required (srt is
+   experimental; Kimi auth through srt's proxy is untested). Until it passes, treat Kimi workers as
+   unconfined and say so in `dispatch models` output. Generated Kimi deny rules remain useful as a
+   second layer.
+3. **macOS fallback (only if srt fails):** wrap the worker process in a generated Seatbelt profile. First ship
    write confinement to the resolved worktree, resolved Git common directory, dispatch job state,
    and a private temp directory. Move to deny-by-default reads only after runtime allowlists and
    negative tests are reliable. Label this backend experimental/deprecated and fail closed rather
    than falling back to an unsandboxed run.
-3. **Linux backend:** prefer Bubblewrap for the first implementation: construct a read-only runtime
+4. **Linux backend:** Claude's native sandbox already uses Bubblewrap there (install `bubblewrap`
+   and `socat`; on Ubuntu 24.04+ an AppArmor profile for `bwrap` user namespaces is needed). For
+   non-Claude workers, prefer Bubblewrap directly: construct a read-only runtime
    view, bind the worktree/Git common/job temp paths read-write, use fresh PID/user/mount namespaces,
    and use `--unshare-net`. Detect disabled unprivileged user namespaces and fail closed. Landlock is
    an attractive later backend where installation constraints make Bubblewrap unsuitable; NsJail
    is justified only if dispatch also needs cgroups/seccomp/resource policy.
-4. **Egress phase:** initially, no-network workers can support only providers with an already-local
+5. **Egress phase:** initially, no-network workers can support only providers with an already-local
    model endpoint. Before claiming hosted Claude/Kimi support is safe, add and test the credential-
    holding broker described above. Until then, describe hosted workers as filesystem-write-confined,
    not protected from secret exfiltration.
