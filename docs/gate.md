@@ -33,10 +33,10 @@ prompt and saved report.
 After PHP lint, the gate runs an optional repository verification hook. An executable
 `.dispatch/verify.sh` in the main checkout takes precedence; otherwise, the gate runs
 `$DISPATCH_VERIFY_CMD` through Bash when that variable is set. The hook runs with the worker
-worktree as its current directory, under `timeout "${DISPATCH_VERIFY_TIMEOUT:-600}"`, and receives
-`DISPATCH_BASE_SHA` and `DISPATCH_ISSUE` in its environment. A non-zero exit rejects immediately,
-saves the hook output verbatim in `gate.md`, and skips the reviewer. With no configured hook,
-`gate.md` explicitly reports `Verify hook: none configured`.
+worktree as its current directory, under a default 600-second timeout configurable with
+`DISPATCH_VERIFY_TIMEOUT`, and receives `DISPATCH_BASE_SHA` and `DISPATCH_ISSUE` in its environment.
+A non-zero exit rejects immediately, saves the hook output verbatim in `gate.md`, and skips the
+reviewer. With no configured hook, `gate.md` explicitly reports `Verify hook: none configured`.
 
 The reviewer must emit a complete line exactly matching one of:
 

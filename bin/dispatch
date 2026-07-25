@@ -570,7 +570,6 @@ cmd_stop() {
 run_gate_model() { # run_gate_model <provider> <model> <worktree> <prompt-file> <scratch-dir>
   local provider="$1" model="$2" wt="$3" prompt_file="$4" scratch="$5" ec=0
   local gate_timeout="${DISPATCH_GATE_TIMEOUT:-900}"
-  need_timeout
   case "$provider" in
     codex)
       "$_timeout" "$gate_timeout" codex exec -C "$wt" -m "$model" --sandbox read-only \
@@ -663,6 +662,7 @@ cmd_gate() {
 
   resolved="$(resolve_model "$gate_alias")"; read -r provider model <<< "$resolved"
   command -v "$provider" >/dev/null 2>&1 || die "$provider not installed"
+  need_timeout
   issue_json="$(cd "$root" && gh issue view "$n" --json title,body 2>/dev/null)" \
     || die "could not fetch issue #$n via gh"
   title="$(printf '%s\n' "$issue_json" | jq -r '.title')"
@@ -696,7 +696,6 @@ cmd_gate() {
   fi
   verify_output=""
   if [[ "$lint_ok" == 1 && -n "$verify_hook" ]]; then
-    need_timeout
     if [[ "$verify_label" == ".dispatch/verify.sh" ]]; then
       if ! verify_output="$(cd "$wt" && DISPATCH_BASE_SHA="$base" DISPATCH_ISSUE="$n" \
         "$_timeout" "${DISPATCH_VERIFY_TIMEOUT:-600}" "$verify_hook" 2>&1)"; then
