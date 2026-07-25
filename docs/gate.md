@@ -21,10 +21,14 @@ the background only after the worker exits successfully.
 
 ## What it checks
 
-The gate requires the job state to be `DONE` and reviews the job's `HEAD` commit against the GitHub
-issue and worker final message. Before running the reviewer, it applies `php -l` to each changed,
-existing PHP file. A PHP lint failure rejects immediately without running the reviewer. Added
-`[VERIFY]` and `TODO` lines are also included in the review prompt and saved report.
+The gate requires the job state to be `DONE` and reviews every commit the worker made — the range
+`base_sha..HEAD`, where `base_sha` is recorded in `.dispatch/jobs/<issue#>/meta` when the worktree is
+created — against the GitHub issue and worker final message. A job whose `base_sha` still equals
+`HEAD` produced no commits and is rejected without running the reviewer. Jobs started before
+`base_sha` was recorded fall back to `HEAD~1`, and the report says so. Before running the reviewer,
+it applies `php -l` to each changed, existing PHP file. A PHP lint failure rejects immediately
+without running the reviewer. Added `[VERIFY]` and `TODO` lines are also included in the review
+prompt and saved report.
 
 The reviewer must emit a complete line exactly matching one of:
 

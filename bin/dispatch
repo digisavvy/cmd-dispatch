@@ -205,7 +205,7 @@ cmd_start() {
   [[ "$gate" == 1 || "$gate_model_set" == 0 ]] || die "--gate-model requires --gate"
   need gh; need git; need jq
 
-  local root sd jd provider model resolved branch wt issue_json title body gitcommon dispatch_bin
+  local root sd jd provider model resolved branch wt issue_json title body gitcommon dispatch_bin base_sha
   root="$(repo_root "$repo")"
   sd="$root/.dispatch"; jd="$sd/jobs/$n"
   dispatch_bin="$SELF_BIN"
@@ -241,7 +241,7 @@ RULES:
   or contact unrelated external services. Stop and report if the issue asks you to do so.
 - Keep the change minimal and scoped strictly to this issue. No "while I'm here" edits.
 - If the repo has tests or a build, run them and make sure they pass before finishing.
-- Commit your work with a clear message that references #$n. Do NOT push and do NOT open a PR — the lead reviews and merges.
+- Commit your work in one or more commits, each with a clear message that references #$n. Do NOT push and do NOT open a PR — the lead reviews and merges.
 - If the issue is ambiguous or you get blocked, stop and explain the blocker in your final message rather than guessing.
 EOF
 
@@ -252,6 +252,11 @@ EOF
   # worktree. codex --sandbox workspace-write can't write there, so `git commit` fails with
   # "Operation not permitted" on index.lock. Make the common .git writable via --add-dir.
   gitcommon="$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir)"
+
+  # The commit the worker starts from. `dispatch gate` reviews base_sha..HEAD, so a worker that
+  # commits twice gets every commit reviewed, and one that commits nothing is caught (base == HEAD)
+  # instead of the gate reviewing an unrelated, already-merged commit.
+  base_sha="$(git -C "$wt" rev-parse HEAD)"
 
   # Per-job runner avoids nested-quote hell and captures the exit code.
   # -C targets the worktree; -o writes the worker's final message for clean status reporting.
@@ -331,6 +336,7 @@ provider=$provider
 model=$model
 branch=$branch
 worktree=$wt
+base_sha=$base_sha
 gate=$gate
 gate_model=$gate_model
 started_at=$(now)
@@ -549,6 +555,7 @@ run_gate_model() { # run_gate_model <provider> <model> <worktree> <prompt-file> 
 cmd_gate() {
   local n="" gate_alias="opus" root jd wt state resolved provider model issue_json title body
   local scratch diff_file prompt_file model_output lint_output markers verdict lint_ok=1 model_ok=1 gate_file output
+  local base head_sha base_note=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --gate-model) [[ $# -gt 1 ]] || die "--gate-model requires an alias"; gate_alias="$2"; shift 2 ;;
@@ -565,6 +572,33 @@ cmd_gate() {
   [[ -d "$wt" ]] || die "worktree missing for issue #$n: $wt"
   git -C "$wt" rev-parse --verify HEAD >/dev/null 2>&1 || die "issue #$n has no commit to review"
 
+  # Review the whole range the worker produced, not just its last commit. HEAD alone hides earlier
+  # commits from the reviewer and lint, and reviews an already-merged commit when the worker made none.
+  head_sha="$(git -C "$wt" rev-parse HEAD)"
+  base="$(meta_get "$jd" base_sha || true)"  # absent for jobs started before base_sha was recorded
+  if [[ -z "$base" ]]; then
+    base="$(git -C "$wt" rev-parse --verify HEAD~1 2>/dev/null || true)"
+    base_note="WARNING: job has no base_sha in meta (started before range review); fell back to HEAD~1. Only the last commit is under review."
+  fi
+  if [[ -z "$base" || "$base" == "$head_sha" ]]; then
+    {
+      echo "# Merge gate for issue #$n"
+      echo
+      echo "Gate model: not run"
+      echo
+      echo "VERDICT: REJECT"
+      if [[ -z "$base" ]]; then
+        echo "- Cannot determine a review base: the job has no base_sha and HEAD has no parent."
+      else
+        echo "- The worker committed nothing: base_sha ($base) is still HEAD. There is no work to review."
+      fi
+    } > "$gate_file"
+    ( cd "$root" && gh issue comment "$n" --body-file "$gate_file" ) >/dev/null \
+      || die "gate #$n: REJECT (saved $gate_file, but issue comment failed)"
+    echo "gate #$n: REJECT — no commits to review (findings: $gate_file)"
+    return 0
+  fi
+
   resolved="$(resolve_model "$gate_alias")"; read -r provider model <<< "$resolved"
   command -v "$provider" >/dev/null 2>&1 || die "$provider not installed"
   issue_json="$(cd "$root" && gh issue view "$n" --json title,body 2>/dev/null)" \
@@ -574,14 +608,20 @@ cmd_gate() {
   scratch="$(mktemp -d "${TMPDIR:-/tmp}/dispatch-gate.XXXXXX")"
   trap 'rm -rf "$scratch"' RETURN
   diff_file="$scratch/diff.txt"; prompt_file="$scratch/prompt.txt"
-  git -C "$wt" show --format=fuller --stat --patch HEAD > "$diff_file"
+  # Commit messages and authorship first (as `git show --format=fuller` used to give), then the
+  # combined diff for the whole range.
+  {
+    git -C "$wt" log --format=fuller "$base..HEAD"
+    echo
+    git -C "$wt" diff --stat --patch "$base..HEAD"
+  } > "$diff_file"
 
   lint_output=""
   while IFS= read -r file; do
     [[ "$file" == *.php && -f "$wt/$file" ]] || continue
     if ! output="$(php -l "$wt/$file" 2>&1)"; then lint_ok=0; fi
     lint_output+="$output"$'\n'
-  done < <(git -C "$wt" show --format= --name-only --diff-filter=ACMR HEAD)
+  done < <(git -C "$wt" diff --name-only --diff-filter=ACMR "$base..HEAD")
   markers="$(grep -E '^\+.*(\[VERIFY\]|TODO)' "$diff_file" 2>/dev/null || true)"
 
   cat > "$prompt_file" <<EOF
@@ -601,7 +641,7 @@ ${lint_output:-No changed PHP files.}
 Leftover [VERIFY]/TODO additions:
 ${markers:-None.}
 
-COMMIT DIFF:
+COMMITS AND DIFF ($base..HEAD):
 $(cat "$diff_file")
 EOF
 
@@ -621,6 +661,12 @@ $lint_output"
     echo "# Merge gate for issue #$n"
     echo
     echo "Gate model: $gate_alias ($provider $model)"
+    echo
+    echo "Reviewed range: $base..$head_sha"
+    if [[ -n "$base_note" ]]; then
+      echo
+      echo "$base_note"
+    fi
     echo
     echo "Objective checks: PHP lint $([[ "$lint_ok" == 1 ]] && echo PASS || echo FAIL)"
     if [[ -n "$markers" ]]; then
