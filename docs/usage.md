@@ -86,6 +86,21 @@ Claude does not persist subscription-window utilization. By default its row ther
 and reset time; Claude does not report a numeric used percentage, so its bar remains `n/a`.
 Providers without observed usage data degrade the same way.
 
+### `dispatch report [--since YYYY-MM-DD] [-R repo]`
+
+Reads the append-only `.dispatch/ledger.log` and reports workers dispatched, gate approvals, and
+accept rate per worker model alias. `--since` includes ledger events on or after the given UTC date.
+The command creates no state files.
+
+```sh
+dispatch report
+dispatch report --since 2026-07-01
+dispatch report -R /path/to/target-repo
+```
+
+If workers have been dispatched but no gate verdicts have been recorded, each alias is still shown
+with zero approvals and a zero percent accept rate.
+
 ### `dispatch status [issue#] [--stale-after seconds]`
 
 Shows all jobs, or one job, with state and the latest parsed event or final worker message.

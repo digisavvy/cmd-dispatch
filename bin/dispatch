@@ -9,6 +9,7 @@
 #   dispatch doctor                       Check deps, list real Codex model strings, validate aliases
 #   dispatch models                       List model aliases -> real slugs + descriptions
 #   dispatch usage [--json] [--probe|--live] Show provider subscription usage and reset windows
+#   dispatch report [--since YYYY-MM-DD] [-R repo] Show approvals per worker alias from the ledger
 #   dispatch start <issue#> <model> [-R repo]   Spawn a worker on an issue
 #   dispatch status [issue#] [options]    Show all jobs (or one) with live state
 #   dispatch wait <issue#> [options]       Block until a job finishes
@@ -556,6 +557,7 @@ cmd_gate() {
   local n="" gate_alias="opus" root jd wt state resolved provider model issue_json title body
   local scratch diff_file prompt_file model_output lint_output markers verdict lint_ok=1 model_ok=1 gate_file output
   local base head_sha base_note=""
+  local worker_alias attempt attempt_field
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --gate-model) [[ $# -gt 1 ]] || die "--gate-model requires an alias"; gate_alias="$2"; shift 2 ;;
@@ -571,6 +573,10 @@ cmd_gate() {
   wt="$(meta_get "$jd" worktree)"
   [[ -d "$wt" ]] || die "worktree missing for issue #$n: $wt"
   git -C "$wt" rev-parse --verify HEAD >/dev/null 2>&1 || die "issue #$n has no commit to review"
+
+  worker_alias="$(meta_get "$jd" alias)"
+  attempt="$(meta_get "$jd" attempt)"
+  attempt_field=""; [[ -n "$attempt" ]] && attempt_field=" attempt=$attempt"
 
   # Review the whole range the worker produced, not just its last commit. HEAD alone hides earlier
   # commits from the reviewer and lint, and reviews an already-merged commit when the worker made none.
@@ -593,6 +599,7 @@ cmd_gate() {
         echo "- The worker committed nothing: base_sha ($base) is still HEAD. There is no work to review."
       fi
     } > "$gate_file"
+    echo "$(now) gate issue=$n verdict=REJECT alias=$worker_alias gate_model=$gate_alias$attempt_field" >> "$root/.dispatch/ledger.log"
     ( cd "$root" && gh issue comment "$n" --body-file "$gate_file" ) >/dev/null \
       || die "gate #$n: REJECT (saved $gate_file, but issue comment failed)"
     echo "gate #$n: REJECT — no commits to review (findings: $gate_file)"
@@ -679,6 +686,8 @@ $lint_output"
   } > "$gate_file"
   trap - RETURN
   rm -rf "$scratch"
+
+  echo "$(now) gate issue=$n verdict=$verdict alias=$worker_alias gate_model=$gate_alias$attempt_field" >> "$root/.dispatch/ledger.log"
 
   if [[ "$verdict" == "APPROVE" ]]; then
     echo "gate #$n: APPROVE — opening PR"
@@ -925,12 +934,71 @@ cmd_usage() {
     (.status // "")] | @tsv')
 }
 
+cmd_report() {
+  local since="" repo="." root ledger arg
+  while [[ $# -gt 0 ]]; do
+    arg="$1"; shift
+    case "$arg" in
+      --since) [[ $# -gt 0 ]] || die "--since requires YYYY-MM-DD"; since="$1"; shift ;;
+      -R|--repo) [[ $# -gt 0 ]] || die "$arg requires a path"; repo="$1"; shift ;;
+      *) die "usage: dispatch report [--since YYYY-MM-DD] [-R repo]" ;;
+    esac
+  done
+  [[ -z "$since" || "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+    || die "--since must be YYYY-MM-DD"
+  root="$(repo_root "$repo")"; ledger="$root/.dispatch/ledger.log"
+  if [[ ! -f "$ledger" ]]; then
+    echo "no dispatch activity recorded in $(basename "$root")."
+    return
+  fi
+
+  awk -v since="$since" '
+    function value(prefix,    i) {
+      for (i = 3; i <= NF; i++)
+        if (index($i, prefix) == 1) return substr($i, length(prefix) + 1)
+      return ""
+    }
+    since != "" && substr($1, 1, 10) < since { next }
+    $2 == "start" {
+      alias = value("alias=")
+      if (alias != "") {
+        if (!(alias in seen)) order[++count] = alias
+        seen[alias] = 1
+        dispatched[alias]++
+      }
+    }
+    $2 == "gate" {
+      gate_count++
+      alias = value("alias=")
+      if (alias != "") {
+        if (!(alias in seen)) order[++count] = alias
+        seen[alias] = 1
+        if (value("verdict=") == "APPROVE") approved[alias]++
+      }
+    }
+    END {
+      if (count == 0) {
+        print "no dispatch activity recorded for the selected period."
+        exit
+      }
+      if (gate_count == 0) print "No gate verdicts recorded yet."
+      printf "%-20s %10s %10s %12s\n", "ALIAS", "DISPATCHED", "APPROVED", "ACCEPT RATE"
+      for (i = 1; i <= count; i++) {
+        alias = order[i]
+        rate = dispatched[alias] ? (100 * approved[alias] / dispatched[alias]) : 0
+        printf "%-20s %10d %10d %11.1f%%\n", alias, dispatched[alias], approved[alias], rate
+      }
+    }
+  ' "$ledger"
+}
+
 main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
     doctor) cmd_doctor "$@" ;;
     models) cmd_models "$@" ;;
     usage)  cmd_usage "$@" ;;
+    report) cmd_report "$@" ;;
     start)  cmd_start "$@" ;;
     status) cmd_status "$@" ;;
     wait)   cmd_wait "$@" ;;
