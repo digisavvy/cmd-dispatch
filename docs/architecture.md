@@ -48,6 +48,7 @@ State lives in the target repository:
   jobs/
     <n>/
       meta
+      prompt.base.txt
       prompt.txt
       run.sh
       pid
@@ -55,6 +56,8 @@ State lives in the target repository:
       events.jsonl
       worker.log
       last_message.txt
+      gate.md
+      attempts/<attempt>/        (archived rework rounds; see gate.md)
 ```
 
 `meta` stores simple `key=value` fields:
@@ -66,8 +69,20 @@ provider=<codex|claude|gemini>
 model=<resolved model>
 branch=dispatch/issue-<n>
 worktree=<absolute worktree path>
+base_sha=<commit the worker starts from>
+gate=<0|1>
+gate_model=<gate model alias>
+attempt=<current attempt, from 1>
+max_attempts=<rework ceiling, 1-3>
 started_at=<UTC timestamp>
 ```
+
+Fields that change after the job starts (`attempt`, `gate_model`) are rewritten in place through a
+temp file: a read takes the first matching line, so appending would leave the stale value winning.
+
+`prompt.base.txt` is the pristine generated prompt. `prompt.txt` is what the worker reads: identical
+to the base on the first attempt, and rebuilt as base plus the latest rejection report on each
+rework round, so feedback never stacks. See [gate.md](gate.md).
 
 `exitcode` is absent while the process is running. A value of `0` means `DONE`; any nonzero value means `FAILED(code)`. `dispatch stop` writes `killed`, which appears as `FAILED(killed)` because the state logic treats only `0` as done.
 

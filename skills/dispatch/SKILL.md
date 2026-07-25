@@ -51,6 +51,9 @@ shows which provider CLIs are installed.
 - `dispatch gate <n> [--gate-model <alias>]` — opt-in headless review (default `opus`); approval
   opens a PR but never merges, rejection holds and reports findings.
 - `dispatch start <n> <alias> --gate [--gate-model <alias>]` — opt into that gate on completion.
+- `dispatch start <n> <alias> --gate --max-attempts <1-3>` — let a rejection re-run the same worker
+  with the gate's findings appended (default `1` = no rework, reject holds). `dispatch rework <n>
+  [--gate-model <alias>]` does the same by hand for a job that has an attempt left.
 
 ## Rules of thumb
 

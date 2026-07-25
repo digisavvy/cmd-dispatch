@@ -45,7 +45,7 @@ Checks core dependencies, reports Codex, Claude, and Gemini paths/versions in a 
 dispatch doctor
 ```
 
-### `dispatch start <issue#> <model> [-R repo] [--gate] [--gate-model alias]`
+### `dispatch start <issue#> <model> [-R repo] [--gate] [--gate-model alias] [--max-attempts N]`
 
 Starts one worker for one GitHub issue. `dispatch` fetches the issue title/body with `gh issue view`, creates a worktree at `../<repo>-wt-issue-<n>`, creates branch `dispatch/issue-<n>`, writes job state under `.dispatch/jobs/<n>/`, and launches the selected provider CLI with `nohup`.
 
@@ -57,12 +57,18 @@ dispatch start 52 mini
 dispatch start 57 gpt-5.6-terra
 dispatch start 41 5.6 -R /path/to/target-repo
 dispatch start 42 5.6 --gate --gate-model opus
+dispatch start 43 5.6 --gate --max-attempts 2
 ```
 
 Only one job directory may exist per issue. To redo an issue, stop or clean the existing job first.
 The automatic merge gate is off by default. `--gate` runs it in the background after a successful
 worker exit. `--gate-model` selects its model alias and defaults to `opus`; it is only valid with
 `--gate`.
+
+`--max-attempts` bounds automatic rework on a gate rejection. It defaults to `1` (reject holds the
+job, as before), accepts at most `3`, and is only valid with `--gate`. With a higher value, a
+rejection re-runs the same worker with the gate's findings appended to its prompt; the last attempt
+holds and comments as usual. See [gate.md](gate.md).
 
 ### `dispatch usage [--json] [--probe|--live]`
 
@@ -188,6 +194,24 @@ objective-check failure holds the job and posts the findings as an issue comment
 dispatch gate 41
 dispatch gate 41 --gate-model 5.6
 ```
+
+### `dispatch rework <issue#> [--gate-model alias] [-R repo]`
+
+Re-runs the same worker in the same worktree with the gate's rejection findings appended to its
+prompt, then re-gates it. This is the manual entry point to the bounded rework loop that
+`--max-attempts` runs automatically.
+
+```sh
+dispatch rework 41
+dispatch rework 41 --gate-model 5.6
+```
+
+It refuses unless the job exists, is `DONE`, still has its worktree, has a `gate.md` containing
+`VERDICT: REJECT`, and has `attempt < max_attempts` in `meta`. Jobs started without
+`--max-attempts` greater than `1` therefore never rework. The previous round's `gate.md`,
+`last_message.txt`, `events.jsonl`, `worker.log`, and `exitcode` are archived under
+`.dispatch/jobs/<n>/attempts/<attempt>/`, and `--gate-model` changes the reviewer for the next
+round. See [gate.md](gate.md).
 
 ### `dispatch clean <issue#>`
 
