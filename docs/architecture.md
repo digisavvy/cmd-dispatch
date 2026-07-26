@@ -26,7 +26,7 @@ The `--add-dir` path points at the repository's Git common directory so the work
 
 Claude runs with the worktree as cwd, stream JSON, `--add-dir "$gitcommon"`, and `--dangerously-skip-permissions`; the isolated worktree and foreman review provide the same trust boundary. Gemini has an unverified runner template only.
 
-The shell pid from the background `nohup bash "$jobdir/run.sh"` process is written to `pid`. When `codex exec` exits, `run.sh` writes the exit code to `exitcode`, then calls `dispatch notify <n> <state> -R <repo>` through the resolved dispatch bin. The notification (terminal bell, macOS banner, optional `DISPATCH_NOTIFY_CMD` hook) fires only after `exitcode` is on disk, so a wedged channel can never block the worker or the foreman's polling loop. See [usage.md](usage.md) for the payload and channels.
+The shell pid from the background `nohup bash "$jobdir/run.sh"` process is written to `pid`. When `codex exec` exits, `run.sh` writes the exit code to `exitcode`, then appends a `finish` line to the ledger and calls `dispatch notify <n> <state> -R <repo>` through the resolved dispatch bin. Both are additive and fire only after `exitcode` is on disk, so a wedged append or notification channel can never block the worker or the foreman's polling loop. The notification (terminal bell, macOS banner, optional `DISPATCH_NOTIFY_CMD` hook) is described in [usage.md](usage.md). `dispatch stop` writes the `killed` sentinel to `exitcode` and logs its own `stop` line, so a stopped job never also reports `finish`.
 
 ## Event Streams
 
@@ -45,6 +45,8 @@ State lives in the target repository:
 ```text
 .dispatch/
   ledger.log
+  archive/
+    <n>-<utc-ts>/            (review record kept by `dispatch clean`; see usage.md)
   jobs/
     <n>/
       meta
@@ -85,6 +87,32 @@ to the base on the first attempt, and rebuilt as base plus the latest rejection 
 rework round, so feedback never stacks. See [gate.md](gate.md).
 
 `exitcode` is absent while the process is running. A value of `0` means `DONE`; any other numeric value means `FAILED(code)`. `dispatch stop` writes the sentinel `killed`, which reports as `KILLED`.
+
+### Ledger
+
+`ledger.log` is append-only: nothing in `dispatch` rewrites or truncates it. One event per line, in a
+fixed `<ts> <verb> issue=<n> k=v…` grammar:
+
+```text
+<ts> start  issue=<n> alias=<a> provider=<p> model=<m> pid=<pid>
+<ts> stop   issue=<n> pid=<pid>
+<ts> gate   issue=<n> verdict=<APPROVE|REJECT> alias=<a> gate_model=<g> [attempt=<k>]
+<ts> rework issue=<n> attempt=<k>
+<ts> pr     issue=<n> branch=<branch>
+<ts> finish issue=<n> state=<DONE|FAILED> exit=<code> attempt=<k>
+<ts> clean  issue=<n> branch=<branch> archived=<path relative to the repo root|none>
+```
+
+Every writer appends one short line with a single `echo` and no locking. That is safe because an
+append to a regular file is atomic per `write(2)`, and bash's builtin `echo` issues one write below
+roughly 1 KB — a longer line tears when jobs run in parallel. Findings, diffs, and JSON payloads
+therefore never belong on a ledger line; they live in the job directory. See
+[event-log-research.md](event-log-research.md) for the measurements behind that bound.
+
+`dispatch report` is a pure `awk` projection over this file. It keys on the verb and skips unknown
+verbs and unknown `k=v` fields, so a new verb needs no migration and ledgers written before a verb
+existed stay readable. Consumers of `finish` must read its absence as "unknown", not as "did not
+finish".
 
 ## Merge Gate
 
