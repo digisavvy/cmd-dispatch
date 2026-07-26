@@ -312,8 +312,14 @@ codex exec -C "$wt" -m "$model" --sandbox workspace-write --add-dir "$gitcommon"
   > "$jd/events.jsonl" 2> "$jd/worker.log"
 worker_ec=\$?
 echo \$worker_ec > "$jd/exitcode"
-# Ping the human (additive — exitcode is already on disk, so a wedged channel can't block).
 _state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
+# Terminal ledger event (additive — exitcode is on disk first, so a wedged append can't block).
+# 'dispatch stop' writes exitcode=killed and logs its own 'stop' line; skip finish when that won.
+_attempt="\$(grep -E '^attempt=' "$jd/meta" 2>/dev/null | head -1 | sed 's/^attempt=//')"
+if [ "\$(cat "$jd/exitcode" 2>/dev/null)" = "\$worker_ec" ]; then
+  echo "\$(date -u +%FT%TZ) finish issue=$n state=\${_state%%(*} exit=\$worker_ec attempt=\${_attempt:-1}" >> "$sd/ledger.log"
+fi
+# Ping the human (additive — exitcode is already on disk, so a wedged channel can't block).
 "$dispatch_bin" notify "$n" "\$_state" -R "$root" >/dev/null 2>&1 || true
 EOF
     ;;
@@ -326,9 +332,15 @@ EOF
 worker_ec=\$?
 jq -r 'select(.type=="result") | .result // .text // empty' "$jd/events.jsonl" | tail -1 > "$jd/last_message.txt"
 echo \$worker_ec > "$jd/exitcode"
+_state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
+# Terminal ledger event (additive — exitcode is on disk first, so a wedged append can't block).
+# 'dispatch stop' writes exitcode=killed and logs its own 'stop' line; skip finish when that won.
+_attempt="\$(grep -E '^attempt=' "$jd/meta" 2>/dev/null | head -1 | sed 's/^attempt=//')"
+if [ "\$(cat "$jd/exitcode" 2>/dev/null)" = "\$worker_ec" ]; then
+  echo "\$(date -u +%FT%TZ) finish issue=$n state=\${_state%%(*} exit=\$worker_ec attempt=\${_attempt:-1}" >> "$sd/ledger.log"
+fi
 # Ping the human (additive — exitcode is already on disk, so a wedged channel can't block).
 # The #15 gate step slots in above and passes its verdict as the notify message.
-_state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
 "$dispatch_bin" notify "$n" "\$_state" -R "$root" >/dev/null 2>&1 || true
 EOF
     ;;
@@ -340,9 +352,15 @@ EOF
 worker_ec=\$?
 tail -1 "$jd/events.jsonl" > "$jd/last_message.txt"
 echo \$worker_ec > "$jd/exitcode"
+_state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
+# Terminal ledger event (additive — exitcode is on disk first, so a wedged append can't block).
+# 'dispatch stop' writes exitcode=killed and logs its own 'stop' line; skip finish when that won.
+_attempt="\$(grep -E '^attempt=' "$jd/meta" 2>/dev/null | head -1 | sed 's/^attempt=//')"
+if [ "\$(cat "$jd/exitcode" 2>/dev/null)" = "\$worker_ec" ]; then
+  echo "\$(date -u +%FT%TZ) finish issue=$n state=\${_state%%(*} exit=\$worker_ec attempt=\${_attempt:-1}" >> "$sd/ledger.log"
+fi
 # Ping the human (additive — exitcode is already on disk, so a wedged channel can't block).
 # The #15 gate step slots in above and passes its verdict as the notify message.
-_state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
 "$dispatch_bin" notify "$n" "\$_state" -R "$root" >/dev/null 2>&1 || true
 EOF
     ;;
@@ -355,9 +373,15 @@ EOF
 worker_ec=\$?
 jq -r 'select(.role=="assistant") | .content // empty' "$jd/events.jsonl" | tail -1 > "$jd/last_message.txt"
 echo \$worker_ec > "$jd/exitcode"
+_state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
+# Terminal ledger event (additive — exitcode is on disk first, so a wedged append can't block).
+# 'dispatch stop' writes exitcode=killed and logs its own 'stop' line; skip finish when that won.
+_attempt="\$(grep -E '^attempt=' "$jd/meta" 2>/dev/null | head -1 | sed 's/^attempt=//')"
+if [ "\$(cat "$jd/exitcode" 2>/dev/null)" = "\$worker_ec" ]; then
+  echo "\$(date -u +%FT%TZ) finish issue=$n state=\${_state%%(*} exit=\$worker_ec attempt=\${_attempt:-1}" >> "$sd/ledger.log"
+fi
 # Ping the human (additive — exitcode is already on disk, so a wedged channel can't block).
 # The #15 gate step slots in above and passes its verdict as the notify message.
-_state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
 "$dispatch_bin" notify "$n" "\$_state" -R "$root" >/dev/null 2>&1 || true
 EOF
     ;;
@@ -922,6 +946,40 @@ Dispatched worker (model $(meta_get "$jd" model)). Reviewed by lead before open.
   echo "$(now) pr issue=$n branch=$branch" >> "$root/.dispatch/ledger.log"
 }
 
+# Copy a job's review record out before `clean` removes the job dir. Small text artifacts only:
+# events.jsonl and worker.log are the unbounded provider stream and are deliberately dropped, along
+# with the reproducible/transient files (run.sh, pid, exitcode, prompt.txt). See
+# docs/event-log-research.md. Prints the archive path relative to the repo root, or "none".
+archive_job() { # archive_job <jobdir> <state-dir> <issue#> <repo-root>
+  local jd="$1" sd="$2" n="$3" root="$4" arch f d k
+  arch="$sd/archive/$n-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$arch"
+  for f in meta gate.md last_message.txt prompt.base.txt; do
+    if [[ -f "$jd/$f" ]]; then cp "$jd/$f" "$arch/$f"; fi
+  done
+  for d in "$jd"/attempts/*/; do
+    [[ -d "$d" ]] || continue
+    k="$(basename "$d")"
+    for f in gate.md last_message.txt; do
+      if [[ -f "$d$f" ]]; then mkdir -p "$arch/attempts/$k"; cp "$d$f" "$arch/attempts/$k/$f"; fi
+    done
+  done
+  if [[ -z "$(ls -A "$arch")" ]]; then rmdir "$arch"; echo "none"; return; fi
+  printf '%s\n' "${arch#"$root"/}"
+}
+
+# Bound the archive so it can never grow like Codex's unrotated session logs: keep the newest
+# <keep> job archives and drop the rest. Names are <issue>-<utc-ts>, so sort on the stamp field
+# rather than the whole name, and only ever remove entries matching that shape.
+prune_archives() { # prune_archives <archive-dir> <keep>
+  local ad="$1" keep="$2" name
+  [[ -d "$ad" ]] || return 0
+  while IFS= read -r name; do
+    [[ "$name" =~ ^[0-9]+-[0-9]{8}T[0-9]{6}Z$ ]] || continue
+    rm -rf "${ad:?}/$name"
+  done < <(ls -1 "$ad" 2>/dev/null | sort -t- -k2,2r | tail -n +"$((keep + 1))")
+}
+
 cmd_clean() {
   [[ $# -eq 1 ]] || die "usage: dispatch clean <issue#>"
   local n="$1"
@@ -940,8 +998,15 @@ cmd_clean() {
   [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
   [[ -n "$wt" && -d "$wt" ]] && git -C "$root" worktree remove --force "$wt" 2>/dev/null || true
   [[ -n "$branch" ]] && git -C "$root" branch -D "$branch" 2>/dev/null || true
+  local archived="none" keep="${DISPATCH_ARCHIVE_KEEP:-50}"
+  if [[ "${DISPATCH_ARCHIVE:-on}" != "off" ]]; then
+    [[ "$keep" =~ ^[0-9]+$ ]] || die "DISPATCH_ARCHIVE_KEEP must be a number, got '$keep'"
+    archived="$(archive_job "$jd" "$sd" "$n" "$root")"
+    prune_archives "$sd/archive" "$keep"
+  fi
+  echo "$(now) clean issue=$n branch=$branch archived=$archived" >> "$sd/ledger.log"
   rm -rf "$jd"
-  echo "cleaned #$n (worktree, branch, and job state removed)."
+  echo "cleaned #$n (worktree, branch, and job state removed; archive: $archived)."
 }
 
 # Notification banners are assembled from job state only — never from issue-derived text, per

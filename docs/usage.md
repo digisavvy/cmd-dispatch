@@ -215,13 +215,36 @@ round. See [gate.md](gate.md).
 
 ### `dispatch clean <issue#>`
 
-Stops the recorded pid if present, force-removes the worktree, deletes the local branch, and removes `.dispatch/jobs/<n>/`.
+Stops the recorded pid if present, force-removes the worktree, deletes the local branch, archives the
+job's review record, appends a clean entry to `.dispatch/ledger.log`, and removes `.dispatch/jobs/<n>/`.
 
 ```sh
 dispatch clean 52
 ```
 
 This is the reset path for reassigning or starting over on an issue.
+
+The archive is a copy of the small text artifacts under `.dispatch/archive/<n>-<utc-ts>/`, so a
+post-mortem survives the cleanup:
+
+| Archived | Dropped |
+|---|---|
+| `meta`, `gate.md`, `last_message.txt`, `prompt.base.txt` | `events.jsonl`, `worker.log` |
+| `attempts/<k>/gate.md`, `attempts/<k>/last_message.txt` | `attempts/<k>/events.jsonl`, `attempts/<k>/worker.log` |
+| | `run.sh`, `pid`, `exitcode`, `prompt.txt` |
+
+The dropped set is the unbounded provider stream and the reproducible scaffolding; keeping it is the
+failure mode described in [event-log-research.md](event-log-research.md). Each `clean` also prunes the
+oldest archives beyond a fixed cap, so `.dispatch/archive/` stays bounded without a separate command.
+
+- **`DISPATCH_ARCHIVE=off`** skips archiving entirely (delete-only, the pre-archive behaviour). The
+  ledger still records the clean, with `archived=none`.
+- **`DISPATCH_ARCHIVE_KEEP`** sets the retention cap; default `50` job archives.
+
+```sh
+DISPATCH_ARCHIVE=off dispatch clean 52
+DISPATCH_ARCHIVE_KEEP=10 dispatch clean 52
+```
 
 ### `dispatch notify <issue#> <state> [next-action...] [-R repo]`
 
