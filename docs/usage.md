@@ -213,16 +213,35 @@ It refuses unless the job exists, is `DONE`, still has its worktree, has a `gate
 `.dispatch/jobs/<n>/attempts/<attempt>/`, and `--gate-model` changes the reviewer for the next
 round. See [gate.md](gate.md).
 
-### `dispatch clean <issue#>`
+### `dispatch clean <issue#> [--force]`
 
-Stops the recorded pid if present, force-removes the worktree, deletes the local branch, archives the
-job's review record, appends a clean entry to `.dispatch/ledger.log`, and removes `.dispatch/jobs/<n>/`.
+Stops the recorded pid if present, force-removes the worktree, prunes stale worktree metadata,
+deletes the local branch, archives the job's review record, appends a clean entry to
+`.dispatch/ledger.log`, and removes `.dispatch/jobs/<n>/`.
 
 ```sh
 dispatch clean 52
 ```
 
 This is the reset path for reassigning or starting over on an issue.
+
+Because deleting the branch is a force delete, `clean` first checks whether the branch holds commits
+that exist on no other branch, remote-tracking ref, or tag. If it does, and the job never reached
+`dispatch pr`, the clean is refused — those commits are the worker's only output and would survive
+only in the reflog:
+
+```text
+dispatch: issue #52 has 2 commit(s) on dispatch/issue-52 that exist on no other branch, remote, or tag.
+Cleaning would discard them (recoverable from the reflog only).
+  keep them:     dispatch pr 52          (push the branch and open a PR)
+  discard them:  dispatch clean 52 --force
+```
+
+Cleaning after a PR or a merge is unaffected and stays silent: the commits are on `origin/<branch>`
+and on the base branch, and a job with a recorded `pr_url` is exempt from the check even if the PR
+was squash-merged and its remote-tracking ref has since been pruned. Use `--force` for the
+intentional discard — a throwaway experiment, or a worker whose output is not worth a PR. The ledger
+records the count either way as `unmerged=<n>`.
 
 The archive is a copy of the small text artifacts under `.dispatch/archive/<n>-<utc-ts>/`, so a
 post-mortem survives the cleanup:

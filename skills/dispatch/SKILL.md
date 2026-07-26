@@ -24,6 +24,7 @@ Don't use it for a change you should just make directly, or for non-code issues 
    run `dispatch gate <n> [--gate-model <alias>]` for a headless review.
 5. **Land:** `dispatch pr <n>` (pushes branch, opens PR). Never PR a FAILED job or unreviewed work.
 6. **Steer/tidy:** `dispatch stop <n>` · reassign = `dispatch clean <n> && dispatch start <n> <alias>`.
+   `clean` refuses to discard un-PR'd commits; ask the user before reaching for `clean <n> --force`.
 
 ## Models (alias carries provider)
 

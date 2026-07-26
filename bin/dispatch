@@ -18,7 +18,7 @@
 #   dispatch gate <issue#> [--gate-model alias] Review a finished job; open PR if approved
 #   dispatch rework <issue#> [--gate-model alias] Re-run the worker with the gate's REJECT findings
 #   dispatch pr <issue#>                  Push the branch and open a PR (lead reviews first)
-#   dispatch clean <issue#>               Remove the worktree + branch + job state
+#   dispatch clean <issue#> [--force]     Remove the worktree + branch + job state (--force also discards un-PR'd commits)
 #   dispatch notify <issue#> <state> [msg]  Ping a human (bell + macOS banner + $DISPATCH_NOTIFY_CMD)
 #
 # <model> may be an alias from models.conf (e.g. 5.6) or a raw Codex model string.
@@ -993,9 +993,39 @@ prune_archives() { # prune_archives <archive-dir> <keep>
   done < <(ls -1 "$ad" 2>/dev/null | sort -t- -k2,2r | tail -n +"$((keep + 1))")
 }
 
+# Worktree inspection reads --porcelain, never the human `git worktree list` output: the latter is
+# column-padded and gives no unambiguous field boundary for paths containing spaces. The porcelain
+# form is one `worktree <absolute-path>` line per entry, and git prints the resolved physical path.
+worktree_registered() { # worktree_registered <repo-root> <worktree-path>
+  local root="$1" path="$2" line
+  while IFS= read -r line; do
+    [[ "$line" == "worktree "* ]] || continue
+    [[ "${line#worktree }" == "$path" ]] && return 0
+  done < <(git -C "$root" worktree list --porcelain 2>/dev/null)
+  return 1
+}
+
+# Commits reachable from this branch and from nothing else — no other branch, no remote-tracking
+# ref, no tag. That is exactly the set `git branch -D` would strand in the reflog. It is 0 for the
+# ordinary clean-after-pr/merge, because `dispatch pr` pushed the branch (origin/<branch> holds the
+# commits) and a merge puts them on the base branch too.
+branch_only_commits() { # branch_only_commits <repo-root> <branch>
+  local count
+  count="$(git -C "$1" rev-list --count "$2" --not --exclude="$2" --branches --remotes --tags 2>/dev/null || true)"
+  [[ "$count" =~ ^[0-9]+$ ]] || count=0
+  printf '%s\n' "$count"
+}
+
 cmd_clean() {
-  [[ $# -eq 1 ]] || die "usage: dispatch clean <issue#>"
-  local n="$1"
+  local n="" force=0 arg
+  while [[ $# -gt 0 ]]; do
+    arg="$1"; shift
+    case "$arg" in
+      --force) force=1 ;;
+      *) [[ -z "$n" ]] || die "usage: dispatch clean <issue#> [--force]"; n="$arg" ;;
+    esac
+  done
+  [[ -n "$n" ]] || die "usage: dispatch clean <issue#> [--force]"
   validate_issue "$n"
   local root sd jd wt wt_check branch expected_wt expected_branch
   root="$(repo_root .)"; sd="$root/.dispatch"; jd="$sd/jobs/$n"
@@ -1007,9 +1037,31 @@ cmd_clean() {
   wt_check="$wt"; [[ -d "$wt" ]] && wt_check="$(cd "$wt" && pwd -P)"
   [[ -n "$wt" && "$wt_check" == "$expected_wt" ]] || die "refusing unsafe worktree path in job #$n: ${wt:-<empty>}"
   [[ -n "$branch" && "$branch" == "$expected_branch" ]] || die "refusing unsafe branch in job #$n: ${branch:-<empty>}"
+  # `branch -D` is a force delete, and for a job whose commits were never pushed the branch is the
+  # only copy of them — reflog recovery only. So cleaning a DONE-but-not-yet-PR'd job would silently
+  # discard the worker's output. Refuse unless the discard is explicit. A job that reached
+  # `dispatch pr` is exempt: its commits are on the remote even when the PR was squash-merged and
+  # the remote-tracking ref has since been pruned, which is why pr_url is checked as well as the refs.
+  local unmerged=0 pr_url
+  pr_url="$(meta_get "$jd" pr_url || true)"
+  if git -C "$root" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null 2>&1; then
+    unmerged="$(branch_only_commits "$root" "$branch")"
+  fi
+  if (( unmerged > 0 )) && [[ "$force" == 0 && -z "$pr_url" ]]; then
+    die "issue #$n has $unmerged commit(s) on $branch that exist on no other branch, remote, or tag.
+Cleaning would discard them (recoverable from the reflog only).
+  keep them:     dispatch pr $n          (push the branch and open a PR)
+  discard them:  dispatch clean $n --force"
+  fi
   local pid; pid="$(cat "$jd/pid" 2>/dev/null || true)"
   [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
-  [[ -n "$wt" && -d "$wt" ]] && git -C "$root" worktree remove --force "$wt" 2>/dev/null || true
+  if [[ -n "$wt" ]] && worktree_registered "$root" "$wt_check"; then
+    git -C "$root" worktree remove --force "$wt" 2>/dev/null || true
+  fi
+  # Without this, a `worktree remove` that failed (or a worktree dir deleted by hand) leaves
+  # .git/worktrees/<name> behind, and the stale metadata blocks re-adding <repo>-wt-issue-<n>.
+  git -C "$root" worktree prune 2>/dev/null || true
+  # `branch -D` prints "Deleted branch <b> (was <sha>)" — the sha a --force discard is recovered from.
   [[ -n "$branch" ]] && git -C "$root" branch -D "$branch" 2>/dev/null || true
   local archived="none" keep="${DISPATCH_ARCHIVE_KEEP:-50}"
   if [[ "${DISPATCH_ARCHIVE:-on}" != "off" ]]; then
@@ -1017,9 +1069,13 @@ cmd_clean() {
     archived="$(archive_job "$jd" "$sd" "$n" "$root")"
     prune_archives "$sd/archive" "$keep"
   fi
-  echo "$(now) clean issue=$n branch=$branch archived=$archived" >> "$sd/ledger.log"
+  echo "$(now) clean issue=$n branch=$branch archived=$archived unmerged=$unmerged" >> "$sd/ledger.log"
   rm -rf "$jd"
   echo "cleaned #$n (worktree, branch, and job state removed; archive: $archived)."
+  # Only a real discard is worth reporting: with a pr_url the commits are on the remote already.
+  (( unmerged > 0 )) && [[ -z "$pr_url" ]] \
+    && echo "discarded $unmerged commit(s) that were only on $branch — recover from: git reflog"
+  return 0
 }
 
 # Notification banner fields are single-line and safe to embed in an AppleScript literal. The only

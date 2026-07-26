@@ -66,7 +66,8 @@ dispatch status               # RUNNING / DONE / FAILED / KILLED + last event / 
 dispatch usage                # subscription usage bars and reset windows
 dispatch logs 41 -f           # tail live output
 dispatch stop 52              # kill a worker (keeps the worktree)
-dispatch clean 52             # remove worktree + branch + job state (to reassign)
+dispatch clean 52             # remove worktree + branch + job state (refuses to discard un-PR'd commits)
+dispatch clean 52 --force     # ...and discard them anyway
 dispatch pr 41                # push branch + open PR closing the issue (after you review)
 ```
 
