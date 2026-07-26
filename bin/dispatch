@@ -655,7 +655,7 @@ cmd_gate() {
     fi
     ( cd "$root" && gh issue comment "$n" --body-file "$gate_file" ) >/dev/null \
       || die "gate #$n: REJECT (saved $gate_file, but issue comment failed)"
-    cmd_notify "$n" "REJECT" "review findings: $gate_file"
+    cmd_notify "$n" "REJECT" "Review findings: $gate_file"
     echo "gate #$n: REJECT — no commits to review (findings: $gate_file)"
     return 0
   fi
@@ -792,7 +792,7 @@ $verify_output"
   else
     ( cd "$root" && gh issue comment "$n" --body-file "$gate_file" ) >/dev/null \
       || die "gate #$n: REJECT (saved $gate_file, but issue comment failed)"
-    cmd_notify "$n" "REJECT" "review findings: $gate_file"
+    cmd_notify "$n" "REJECT" "Review findings: $gate_file"
     echo "gate #$n: REJECT — held (findings: $gate_file)"
   fi
 }
@@ -891,7 +891,7 @@ cmd_rework() {
 
   echo "$(now) rework issue=$n attempt=$next" >> "$root/.dispatch/ledger.log"
   cmd_notify "$n" "REWORK" -R "$root" \
-    "gate REJECT — rework attempt $next of $max_attempts running: dispatch logs $n -f" || true
+    "Rework attempt $next of $max_attempts running — watch: dispatch logs $n -f" || true
 
   # run.sh's auto-gate resolves the repo with `repo_root .`, so respawn from the repo root rather
   # than whatever cwd this command inherited.
@@ -944,6 +944,11 @@ cmd_clean() {
   echo "cleaned #$n (worktree, branch, and job state removed)."
 }
 
+# Notification banners are assembled from job state only — never from issue-derived text, per
+# SECURITY.md. These keep each field to a single line and safe to embed in an AppleScript literal.
+notify_scrub() { local s="${1//$'\r'/ }"; printf '%s' "${s//$'\n'/ }"; }
+notify_osa_esc() { local s="${1//\\/\\\\}"; printf '%s' "${s//\"/\\\"}"; }
+
 # Push a human notification when a job enters an attention state (DONE / FAILED / STALLED /
 # gate verdict). Additive by design: run.sh calls this AFTER writing exitcode, so a wedged
 # channel can never block the worker or the foreman's polling loop.
@@ -960,33 +965,45 @@ cmd_notify() {
   validate_issue "$n"
   [[ "${DISPATCH_NOTIFY:-on}" == "off" ]] && return 0
 
-  local root jd repo_name provider model pr_url action payload esc
-  root="$(repo_root "$repo")"; jd="$root/.dispatch/jobs/$n"; repo_name="$(basename "$root")"
+  local root jd repo_name provider model worker_alias label pr_url action title payload
+  root="$(repo_root "$repo")"; jd="$root/.dispatch/jobs/$n"
+  repo_name="$(notify_scrub "$(basename "$root")")"
+  state="$(notify_scrub "$state")"
   provider="$(meta_get "$jd" provider || true)"; provider="${provider:-unknown}"
   model="$(meta_get "$jd" model || true)"; model="${model:-unknown}"
+  # The alias is what the foreman typed and is far shorter than the resolved slug, so it wins the
+  # subtitle when meta has one; jobs started before aliases were recorded fall back to the model.
+  worker_alias="$(meta_get "$jd" alias || true)"
+  label="$(notify_scrub "${worker_alias:-$model}")"
   pr_url="$(meta_get "$jd" pr_url || true)"  # written by the auto-gate (#15) when it opens a PR
   action="${extra[*]:-}"
   if [[ -z "$action" ]]; then
     case "$state" in
-      DONE)     action="review & merge: dispatch pr $n" ;;
-      FAILED*)  action="worker errored — inspect: dispatch logs $n" ;;
-      STALLED*) action="may be stuck / awaiting something — check: dispatch logs $n -f" ;;
-      *)        action="dispatch status $n" ;;
+      DONE)     action="Review & merge: dispatch pr $n" ;;
+      FAILED*)  action="Worker errored — inspect: dispatch logs $n" ;;
+      STALLED*) action="May be stuck / awaiting something — check: dispatch logs $n -f" ;;
+      *)        action="Check: dispatch status $n" ;;
     esac
   fi
-  payload="[dispatch] #$n $state — $model on $repo_name. Next: $action"
-  payload="${payload//$'\r'/ }"; payload="${payload//$'\n'/ }"
+  action="$(notify_scrub "$action")"
+  # Front-load the signal. A banner reliably shows only its first lines, so the two facts that
+  # matter — which job, what outcome — go in the title, the worker identity in the subtitle, and
+  # the next action gets the message line to itself. `payload` is the one-line form for hooks.
+  title="#$n $state · $repo_name"
+  payload="$title — $action"
 
   # Terminal bell on the controlling terminal, if the session still has one.
   { printf '\a' > /dev/tty; } 2>/dev/null || true
 
   # macOS native banner: terminal-notifier when installed, osascript otherwise.
+  # -subtitle and -group are both terminal-notifier 2.0.0 flags; -group makes a later round for the
+  # same job (rework, gate verdict) replace its earlier banner instead of stacking a new one.
   if [[ "$(uname -s)" == "Darwin" ]]; then
     if command -v terminal-notifier >/dev/null 2>&1; then
-      terminal-notifier -title "dispatch" -message "$payload" -sound default >/dev/null 2>&1 || true
+      terminal-notifier -title "$title" -subtitle "$label" -message "$action" \
+        -group "dispatch-$repo_name-$n" -sound default >/dev/null 2>&1 || true
     elif command -v osascript >/dev/null 2>&1; then
-      esc="${payload//\\/\\\\}"; esc="${esc//\"/\\\"}"
-      osascript -e "display notification \"$esc\" with title \"dispatch\" sound name \"Ping\"" >/dev/null 2>&1 || true
+      osascript -e "display notification \"$(notify_osa_esc "$action")\" with title \"$(notify_osa_esc "$title")\" subtitle \"$(notify_osa_esc "$label")\" sound name \"Ping\"" >/dev/null 2>&1 || true
     fi
   fi
 

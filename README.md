@@ -74,11 +74,13 @@ dispatch pr 41                # push branch + open PR closing the issue (after y
 
 When a job enters a state that needs a human (`DONE`, `FAILED(code)`), the generated `run.sh`
 pings you after writing its exit code — terminal bell plus a macOS banner (`terminal-notifier`
-if installed, else `osascript`). The message names the **next human action**:
+if installed, else `osascript`). The banner answers which job, what outcome, and what to do now,
+in that order:
 
 ```text
-[dispatch] #41 DONE — gpt-5.6-sol on my-project. Next: review & merge: dispatch pr 41
-[dispatch] #52 FAILED(1) — sonnet on my-project. Next: worker errored — inspect: dispatch logs 52
+#41 DONE · my-project              #52 FAILED(1) · my-project
+5.6                                sonnet
+Review & merge: dispatch pr 41     Worker errored — inspect: dispatch logs 52
 ```
 
 - `DISPATCH_NOTIFY_CMD=<executable>` routes the same event anywhere (Slack, ntfy, cowork-bridge) — the

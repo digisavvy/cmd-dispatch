@@ -237,22 +237,27 @@ dispatch notify 52 FAILED\(1\)
 dispatch notify 41 DONE "gate APPROVED — PR #45 open"
 ```
 
-The payload is one line naming the **next human action**:
+The banner front-loads the signal so the three questions — which job, what outcome, what now —
+are answerable at a glance:
 
 ```text
-[dispatch] #<n> <state> — <model> on <repo>. Next: <action>
+#<n> <state> · <repo>     title
+<alias or model>          subtitle
+<action>                  message
 ```
 
-With no explicit `next-action`, a default is chosen per state: `DONE` → `review & merge:
-dispatch pr <n>`; `FAILED(code)` → `worker errored — inspect: dispatch logs <n>`; `STALLED` →
-`may be stuck / awaiting something — check: dispatch logs <n> -f`.
+With no explicit `next-action`, a default is chosen per state: `DONE` → `Review & merge:
+dispatch pr <n>`; `FAILED(code)` → `Worker errored — inspect: dispatch logs <n>`; `STALLED` →
+`May be stuck / awaiting something — check: dispatch logs <n> -f`.
 
 Channels (all best-effort, never blocking):
 
 - **Terminal bell** on the controlling terminal, if the session still has one.
-- **macOS banner** on Darwin: `terminal-notifier` when installed, `osascript` otherwise.
+- **macOS banner** on Darwin: `terminal-notifier` when installed, `osascript` otherwise. Banners are
+  grouped per job, so a later round replaces the earlier banner instead of stacking.
 - **`DISPATCH_NOTIFY_CMD`** — when set to one trusted local executable, it runs with the headline as args
-  (`<issue#> <state> <payload>`) and the full job context in env:
+  (`<issue#> <state> <headline>`, where the headline is `#<n> <state> · <repo> — <action>`) and the
+  full job context in env:
 
   | Env var | Value |
   |---|---|
@@ -262,7 +267,7 @@ Channels (all best-effort, never blocking):
   | `DISPATCH_REPO` / `DISPATCH_REPO_ROOT` | repo name / absolute path |
   | `DISPATCH_NEXT_ACTION` | the human next step |
   | `DISPATCH_PR_URL` | PR url when a gate opened one (empty otherwise) |
-  | `DISPATCH_MESSAGE` | the full payload line |
+  | `DISPATCH_MESSAGE` | the one-line headline |
 
   Keep the hook fast — it runs synchronously, after the exit code is on disk. Use a wrapper script
   when fixed command-line flags are needed, and treat all arguments and environment values as
