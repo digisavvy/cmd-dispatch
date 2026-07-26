@@ -18,10 +18,17 @@ A banner reliably shows only its first lines, so the notification is split acros
 now**:
 
 ```text
-#43 DONE · cmd-dispatch      <- title:    issue, state, repo
-opus5                        <- subtitle: worker alias (the model slug when meta has no alias)
-Review & merge: dispatch pr 43   <- message:  the next human action, on its own line
+#43 DONE · cmd-dispatch            <- title:    issue, state, repo
+Notifications: issue title in ba…  <- subtitle: the issue title, truncated to 45 characters
+opus5 · Review & merge: dispatch pr 43   <- message: worker alias, then the next human action
 ```
+
+The issue title comes from `title` in the job's `meta`, which `dispatch start` records from the
+issue JSON it already fetches — `dispatch notify` never hits the network. Jobs started before that
+field existed have no `title`, and degrade to the previous layout: the worker alias in the subtitle
+(the model slug when `meta` has no alias) and the bare action in the message. The alias is also
+dropped from the message whenever the combined line would exceed 60 characters, so a long action —
+a gate report path, say — is never pushed out of view by the worker's name.
 
 Default actions are:
 
@@ -34,6 +41,12 @@ Gate notifications pass their own action text (the PR URL on `APPROVE`, the repo
 
 Each banner is sent with `-group dispatch-<repo>-<n>`, so a later round for the same job — a
 rework attempt, then a gate verdict — replaces its earlier banner instead of stacking a new one.
+
+The issue title is untrusted text ([SECURITY.md](../SECURITY.md)). `dispatch start` collapses its
+whitespace and truncates it before it reaches `meta`, and it is used as a display field only: it is
+passed to `terminal-notifier` as a single `-subtitle` argument, or through the same AppleScript
+escaping as every other field for the `osascript` fallback. It is never interpolated into a shell
+string, and dispatch ships no click action that could carry it anywhere (see below).
 
 ## Channels
 

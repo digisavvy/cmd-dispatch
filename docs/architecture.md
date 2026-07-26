@@ -66,6 +66,7 @@ State lives in the target repository:
 
 ```text
 issue=<n>
+title=<issue title, whitespace-collapsed and truncated to 45 chars>
 alias=<requested alias>
 provider=<codex|claude|gemini>
 model=<resolved model>
@@ -81,6 +82,10 @@ started_at=<UTC timestamp>
 
 Fields that change after the job starts (`attempt`, `gate_model`) are rewritten in place through a
 temp file: a read takes the first matching line, so appending would leave the stale value winning.
+
+`title` is the one untrusted, issue-derived field. `dispatch start` collapses its whitespace before
+writing, so an embedded newline cannot forge a second record; it is read back only as banner display
+text. See [notifications.md](notifications.md).
 
 `prompt.base.txt` is the pristine generated prompt. `prompt.txt` is what the worker reads: identical
 to the base on the first attempt, and rebuilt as base plus the latest rejection report on each
