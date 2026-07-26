@@ -27,8 +27,19 @@ sandbox or a substitute for human review. It never merges automatically.
   malicious worker could persist code that runs during a later Git operation. Restricting access to
   `.git/worktrees/<name>` alone breaks commits because objects, refs, and their lock files remain in
   the common directory. A narrower portable allowlist would depend on Git internals and is not used.
+  This risk is reduced for **claude** workers: they run under Claude Code's native OS sandbox, whose
+  linked-worktree awareness auto-allows `Bash` writes to the shared object store and refs while
+  keeping writes to `hooks/` and `config` denied, so a shell command cannot persist a hook or rewrite
+  Git config. The reduction is partial — the built-in Edit tool still has `--add-dir` write access to
+  the common directory (the sandbox covers `Bash` only) — and does not apply to codex, kimi, or gemini
+  workers, which retain broad common-directory access.
 - **Broad worker capabilities:** provider CLIs may run tools non-interactively. Provider sandboxes
-  differ, and local credentials available to those CLIs remain in their own trust boundary.
+  differ, and local credentials available to those CLIs remain in their own trust boundary. The claude
+  worker and gate additionally run under Claude Code's native sandbox: `Bash` writes are OS-confined to
+  the worktree and shared `.git`, `Bash` network egress is denied (empty `allowedDomains`), and reads of
+  `~/.ssh` and `~/.aws` are blocked for sandboxed commands. It fails closed (`failIfUnavailable`) and
+  the unsandboxed-retry escape hatch is disabled (`allowUnsandboxedCommands: false`). The sandbox
+  covers `Bash` only, and its egress proxy allowlists client-supplied hostnames without TLS inspection.
 - **Notification execution:** `DISPATCH_NOTIFY_CMD` deliberately executes a trusted local program.
   It is local configuration, not issue-controlled input, and receives issue-derived values only as
   quoted arguments and environment variables. It must name one executable; use a wrapper script for
