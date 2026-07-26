@@ -61,6 +61,10 @@ Summarize state plainly. Don't invent progress — report what `status` shows.
 - "reassign #52 to 5.6" → `dispatch clean 52 && dispatch start 52 5.6`
 - "start over on #41" → `dispatch clean 41 && dispatch start 41 <model>`
 
+`clean` refuses when the job's branch holds commits that were never PR'd — cleaning would discard
+the worker's only copy. Tell the user what would be lost and let them choose: `dispatch pr <n>` to
+keep the work, or `dispatch clean <n> --force` to throw it away. Never pass `--force` on your own.
+
 ## Land the work (only after YOU review)
 
 When a job is `DONE`:
