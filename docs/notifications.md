@@ -48,6 +48,52 @@ passed to `terminal-notifier` as a single `-subtitle` argument, or through the s
 escaping as every other field for the `osascript` fallback. It is never interpolated into a shell
 string, and dispatch ships no click action that could carry it anywhere (see below).
 
+## Click behavior
+
+Banners have no click action. Clicking one launches `terminal-notifier` and nothing else.
+
+That is deliberate. Every `terminal-notifier` 2.0.0 mechanism that could carry a click was tested on
+macOS 26.3.1 (build 25D771280a) with the Homebrew binary at `/opt/homebrew/bin/terminal-notifier`,
+by sending a notification and clicking it in Notification Center:
+
+| Mechanism | Result |
+| --- | --- |
+| `-execute '/usr/bin/touch <marker>'` | No marker file; no process launch in `log show`. |
+| `-open 'file://<marker>.html'` | No browser tab opened; frontmost app unchanged. |
+| `-activate com.apple.Terminal` | Terminal.app was neither launched nor fronted (checked twice). |
+| `-sender com.apple.Terminal` | Notification not delivered at all — absent from `-list ALL`. |
+
+The clicks did register — some of them brought `terminal-notifier.app` to the front — but no
+advertised action ran, and the notifications stayed in Notification Center afterwards. The binary is
+unsigned (`codesign -dv` reports "code object is not signed at all"), which is the usual reason its
+activation handler never runs on current macOS. A button that only dismisses is worse than none, so
+dispatch wires no action rather than implying one.
+
+If you want working click actions, [`alerter`](https://github.com/vjeantet/alerter) is the opt-in
+alternative: it stays in the foreground until the notification is answered and prints which button
+was pressed, so a wrapper can decide what to do. Drive it from `DISPATCH_NOTIFY_CMD`, where the
+job's state and PR URL are already in the environment:
+
+```sh
+#!/bin/sh
+# dispatch-alerter — on PATH, then: export DISPATCH_NOTIFY_CMD=dispatch-alerter
+answer=$(alerter -title "#$DISPATCH_ISSUE $DISPATCH_STATE · $DISPATCH_REPO" \
+  -message "$DISPATCH_NEXT_ACTION" -actions Open -timeout 30)
+[ "$answer" = "Open" ] || exit 0
+case "$DISPATCH_STATE" in
+  APPROVE) [ -n "$DISPATCH_PR_URL" ] && open "$DISPATCH_PR_URL" ;;
+  *)       open -a Terminal "$DISPATCH_REPO_ROOT" ;;
+esac
+```
+
+Have the click navigate to the decision, never past it: open the PR, the issue, or the repo, but
+never run a `dispatch` command on the human's behalf. `alerter` blocks until answered or timed out,
+so always pass `-timeout` — the hook runs synchronously (see below).
+
+`[VERIFY]` `alerter` is not installed here, so unlike the table above its flags and its exit
+behaviour come from its own documentation rather than a local test. Check `alerter -help` after
+installing. The `DISPATCH_*` values the snippet reads are dispatch's own and are verified.
+
 ## Channels
 
 Every notification attempts a terminal bell. On macOS it also uses `terminal-notifier`, or
