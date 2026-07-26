@@ -325,9 +325,15 @@ EOF
     ;;
   claude) cat > "$jd/run.sh" <<EOF
 #!/usr/bin/env bash
-# This throwaway worktree is reviewed before merge, matching Codex workspace-write's trust model.
+# Confine Bash with Claude Code's native OS sandbox (Seatbelt on macOS, bubblewrap on Linux): writes
+# limited to the worktree + shared .git (hooks/ and config still denied) and no network egress,
+# matching Codex's --sandbox workspace-write trust model. acceptEdits scopes the Edit tool to the
+# worktree and --add-dir paths without stalling headless runs; failIfUnavailable and
+# allowUnsandboxedCommands:false fail closed. See docs/isolation-research.md.
 ( cd "$wt" && claude -p "\$(cat "$jd/prompt.txt")" --model "$model" \\
-    --output-format stream-json --verbose --add-dir "$gitcommon" --dangerously-skip-permissions ) \\
+    --output-format stream-json --verbose --add-dir "$gitcommon" \\
+    --permission-mode acceptEdits \\
+    --settings '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":[]},"credentials":{"files":[{"path":"~/.ssh","mode":"deny"},{"path":"~/.aws","mode":"deny"}]}}}' ) \\
   > "$jd/events.jsonl" 2> "$jd/worker.log"
 worker_ec=\$?
 jq -r 'select(.type=="result") | .result // .text // empty' "$jd/events.jsonl" | tail -1 > "$jd/last_message.txt"
@@ -601,8 +607,11 @@ run_gate_model() { # run_gate_model <provider> <model> <worktree> <prompt-file> 
       cat "$scratch/result.txt" 2>/dev/null || true
       ;;
     claude)
+      # Same native sandbox as the worker; the gate only reviews the diff, so it should need no writes.
       ( cd "$wt" && "$_timeout" "$gate_timeout" claude -p "$(cat "$prompt_file")" --model "$model" \
-          --output-format stream-json --verbose ) >"$scratch/events.jsonl" 2>"$scratch/stderr.log" || ec=$?
+          --output-format stream-json --verbose \
+          --permission-mode acceptEdits \
+          --settings '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":[]},"credentials":{"files":[{"path":"~/.ssh","mode":"deny"},{"path":"~/.aws","mode":"deny"}]}}}' ) >"$scratch/events.jsonl" 2>"$scratch/stderr.log" || ec=$?
       jq -rs '[.[] | select(.type=="result") | .result // .text // empty] | last // empty' \
         "$scratch/events.jsonl" 2>/dev/null
       ;;
