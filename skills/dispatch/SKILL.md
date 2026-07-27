@@ -56,6 +56,38 @@ shows which provider CLIs are installed.
   with the gate's findings appended (default `1` = no rework, reject holds). `dispatch rework <n>
   [--gate-model <alias>]` does the same by hand for a job that has an attempt left.
 
+## Foreman modes
+
+Pick a mode when dispatching; tell the user which one you chose and why.
+
+**claude-solo** — dispatch a Claude worker, skip the machine gate; you review the worktree diff
+before `dispatch pr`.
+
+```sh
+dispatch start <n> opus     # or sonnet / haiku
+```
+
+**verified** — cross-provider gate + up to one rework; you still review before merge.
+
+```sh
+dispatch start <n> <worker> --gate --gate-model <alias-from-another-provider> --max-attempts 2
+```
+
+**dealer's choice (DEFAULT when the user names no mode/model)** — you assign worker + gate per
+issue, state the pick and reasoning when dispatching; the user keeps veto at PR time.
+
+Heuristics:
+- Gnarly logic / infra → best-tier worker + cross-provider gate + 2 attempts
+- Well-specced small scope → balanced worker + gate, 1 attempt
+- Docs / mechanical → cheap worker, no machine gate
+- Anything touching auth, payments, or prod config → best-tier worker AND cross-provider gate, always
+
+**Operational facts:**
+- The gate runs asynchronously **after** a job shows `DONE`. Check
+  `.dispatch/jobs/<n>/attempts/<k>/gate.md` for the verdict before assuming no gate ran.
+- Never commit into a gated job's worktree until its attempts are exhausted — a rework may be
+  running there.
+
 ## Rules of thumb
 
 - **Report failures/blockers first.** Surface a stuck or FAILED worker before wins.
