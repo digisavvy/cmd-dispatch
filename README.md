@@ -97,6 +97,7 @@ Review & merge: dispatch pr 41     Worker errored — inspect: dispatch logs 52
 - [Security](SECURITY.md) - trust model, residual worker risks, and safe-use guidance
 - [Getting started](docs/getting-started.md) - a 5-minute walkthrough of using it (start here)
 - [Usage](docs/usage.md) - install, CLI commands, `/dispatch`, and model aliases
+- [Foreman modes](docs/modes.md) - claude-solo, verified, and dealer's choice with worked examples
 - [Merge gate](docs/gate.md) - opt-in headless review and its approval contract
 - [Notifications](docs/notifications.md) - attention states, channels, payload, and custom hooks
 - [Troubleshooting](docs/troubleshooting.md) - common shell, model, sandbox, cache, and gate gotchas

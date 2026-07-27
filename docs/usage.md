@@ -68,7 +68,7 @@ worker exit. `--gate-model` selects its model alias and defaults to `opus`; it i
 `--max-attempts` bounds automatic rework on a gate rejection. It defaults to `1` (reject holds the
 job, as before), accepts at most `3`, and is only valid with `--gate`. With a higher value, a
 rejection re-runs the same worker with the gate's findings appended to its prompt; the last attempt
-holds and comments as usual. See [gate.md](gate.md).
+holds and comments as usual. See [gate.md](gate.md) and [modes.md](modes.md).
 
 ### `dispatch usage [--json] [--probe|--live]`
 

@@ -68,6 +68,8 @@ refused.
 
 ## Bounded rework
 
+For guidance on when to use a gate and how to combine it with worker choice, see [modes.md](modes.md).
+
 A rejection can be sent back to the same worker instead of held, once per remaining attempt:
 
 ```sh
