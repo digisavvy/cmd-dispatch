@@ -100,6 +100,7 @@ Review & merge: dispatch pr 41     Worker errored — inspect: dispatch logs 52
 - [Foreman modes](docs/modes.md) - claude-solo, verified, and dealer's choice with worked examples
 - [Merge gate](docs/gate.md) - opt-in headless review and its approval contract
 - [Notifications](docs/notifications.md) - attention states, channels, payload, and custom hooks
+- [Browser verification](docs/browser-verification.md) - real-browser verification via the cowork worker (authenticated pages, screenshot evidence)
 - [Troubleshooting](docs/troubleshooting.md) - common shell, model, sandbox, cache, and gate gotchas
 - [Architecture](docs/architecture.md) - worktrees, worker processes, state files, and PR gate
 - [Limitations](docs/limitations.md) - current boundaries and missing commands

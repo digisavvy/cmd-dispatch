@@ -371,3 +371,8 @@ haiku     = claude haiku
 Model resolution treats the first value token as provider and the remainder as model. Unmatched strings error unless their provider can be inferred from the raw slug.
 
 Use `dispatch doctor` after Codex upgrades to check the currently available model strings and update `models.conf`.
+
+## See also
+
+- [browser-verification.md](browser-verification.md) — queue real-browser verification tasks
+  (authenticated pages, screenshot evidence) via the cowork worker
