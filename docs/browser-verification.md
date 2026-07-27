@@ -25,11 +25,12 @@ TASK_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 sqlite3 ~/.cowork-code-mcp/messages.db "
-  INSERT INTO tasks (id, sender, recipient, status, description, created_at, updated_at)
+  INSERT INTO tasks (id, sender, recipient, title, status, description, created_at, updated_at)
   VALUES (
     '$TASK_ID',
     'code',
     'cowork',
+    'Verify site title (read-only)',
     'pending',
     'READ-ONLY. Navigate to https://example.com/wp-admin/options-general.php and confirm the
      site title field reads \"My Site\". Capture a full-page screenshot. Put pass/fail and the
