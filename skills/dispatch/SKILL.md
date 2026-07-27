@@ -88,6 +88,15 @@ Heuristics:
 - Never commit into a gated job's worktree until its attempts are exhausted — a rework may be
   running there.
 
+## Browser verification (cowork worker)
+
+Queue real-browser verification (authenticated admin pages, screenshot evidence) by creating a
+task for `cowork` on the bridge — via the cowork-bridge MCP `create_task` when available (Claude
+workers inherit it), else the sqlite3 INSERT pattern in
+[docs/browser-verification.md](../../docs/browser-verification.md). Poll the task row for
+`completed`/`failed` and read `result`. Default to read-only; only request changes when the
+issue explicitly authorizes them.
+
 ## Rules of thumb
 
 - **Report failures/blockers first.** Surface a stuck or FAILED worker before wins.
