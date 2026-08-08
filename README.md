@@ -96,7 +96,11 @@ Review & merge: dispatch pr 41     Worker errored — inspect: dispatch logs 52
   channel never blocks a worker or the foreman's loop.
 
 A `claude` worker additionally messages the **foreman's Claude Code session** when it finishes, so
-the foreman is told rather than having to poll `dispatch status`. This is a separate channel that
+the foreman is told rather than having to poll `dispatch status`. This rides on
+[cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging), the
+session-to-session channel Claude Code shipped in v2.1.224 (August 2026) — dispatch adopted it the
+week it landed, with the design probes recorded in
+[docs/messaging-research.md](docs/messaging-research.md). This is a separate channel that
 changes nothing above, and it is Claude-only — codex, gemini, and kimi workers have no inbox and
 stay silent. Opt out per job with `--no-report`. Run the foreman in a prompting mode: a `bypassPermissions`
 foreman holds the report instead of delivering it — verified never to arrive at a non-interactive

@@ -18,7 +18,8 @@ job.
 ## The foreman channel
 
 A **reporting** `claude` worker closes that gap by messaging the foreman's session directly when it
-finishes. This is a second, independent channel — it does not replace or alter anything above, and
+finishes, using [cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging)
+— the session-to-session channel introduced in Claude Code v2.1.224 (August 2026). This is a second, independent channel — it does not replace or alter anything above, and
 it exists only for `claude` workers on a local foreman. See [modes.md](modes.md) for the full
 requirements and the `bypassPermissions` trap; the short version:
 

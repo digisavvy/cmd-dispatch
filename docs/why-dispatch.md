@@ -46,7 +46,10 @@ Say you run `dispatch start 41 sonnet` (or tell the foreman "put sonnet on #41")
    `dispatch wait` blocks until one finishes; `dispatch logs -f` watches one work live.
 5. When it finishes you get a ping (terminal bell, macOS banner — or Slack/ntfy/anything via a
    hook). A Claude worker also messages your foreman session directly, so the foreman can tell you
-   "#41 is done" without anyone polling.
+   "#41 is done" without anyone polling. That last part uses
+   [cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging) — a brand-new
+   Claude Code capability (v2.1.224, August 2026) that lets one Claude session pass a note to
+   another on the same machine. Dispatch is one of the first tools built on it.
 6. You read the diff. Good? `dispatch pr 41` pushes and opens a pull request that closes the
    issue. Not good? Kill it, tighten the issue, dispatch again — your repo was never touched.
 
