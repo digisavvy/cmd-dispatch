@@ -3,7 +3,7 @@
 `cmd-dispatch` is a thin file-based foreman, not a live multi-agent runtime. Current limitations are:
 
 - No live-session attach. Workers run through headless `codex exec`, not an interactive Codex session.
-- No mid-run steering channel. To change direction, stop/clean the job and start a new one with different instructions or a different model.
+- No mid-run steering channel. To change direction, stop/clean the job and start a new one with different instructions or a different model. Claude Code's cross-session messaging (v2.1.224+) makes a steering channel *possible* for `claude` workers, but nothing here uses it yet and Codex/Gemini/Kimi workers have no inbox either way. See `docs/messaging-research.md` for the delivery rules, the security tradeoff, and why the obvious shell-script implementation is not viable.
 - Conflicts surface at merge/review time. Per-issue worktrees isolate workers while they run, but they do not prevent later Git conflicts between branches.
 - No `dispatch merge` command. The current landing command is `dispatch pr`, which pushes a branch and opens a PR after foreman review.
 - No full-screen `dispatch watch` dashboard. `dispatch wait` blocks for job completion, while `dispatch logs <issue#> -f` follows both rendered events and stderr progress.
