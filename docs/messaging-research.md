@@ -102,11 +102,14 @@ The worker is itself a Claude session. It *has* `SendMessage`. So the message sh
 **worker → foreman**, sent by the worker's own Claude at the end of its run, rather than
 **run.sh → foreman**, written by a shell script.
 
-Everything this needs is documented:
+Everything this needs is documented, and the load-bearing parts were verified by running real
+`claude -p` workers in this environment (see below):
 
 - *"Claude Code binds an inbox socket for a `claude -p` session like an interactive one, so a
-  long-running `-p` worker can receive messages and appears in the listing."* The worker is a
-  first-class peer, in both directions.
+  long-running `-p` worker can receive messages and appears in the listing."* **Confirmed by probe.**
+  The worker is a first-class peer, in both directions.
+- **`SendMessage` and `ListAgents` are present in a `-p` worker's tool list. Confirmed by probe.**
+  This is the assumption the whole design rests on.
 - Bare mode is the exception that does **not** bind a socket. Dispatch does not use bare mode.
 - The sandbox blob at `bin/dispatch:339` confines **Bash** writes and network egress. `SendMessage`
   is a built-in tool running in the parent process, so the sandbox does not gate it. The
@@ -115,6 +118,27 @@ Everything this needs is documented:
 - The worker runs `--permission-mode acceptEdits` (`bin/dispatch:338`), which the docs place in the
   **prompting** class, not the bypassing one. That is the favourable direction: a prompting sender
   is delivered to a prompting receiver without a dialog.
+
+### Worker-side behavior, verified by probe
+
+Three `claude -p` runs, Claude Code 2.1.226, with `--name` and `--permission-mode acceptEdits`:
+
+| Question | Result |
+| --- | --- |
+| Does a `-p` worker bind an inbox socket? | **Yes.** While alive: `"messagingSocketPath":"/tmp/cc-socks/5170.sock"`, and the socket file existed. Removed on exit — so it is only addressable *while running*. |
+| Does it have `SendMessage` / `ListAgents`? | **Yes**, both in the `system`/`init` event's tool list. |
+| Is `--name` honored? | **Yes.** `"name":"dispatch-probe-43"`, and `nameSource` is **absent** when set explicitly, versus `"derived"` for an unnamed session — a usable discriminator. |
+| Does `kind` distinguish a `-p` worker? | **No.** It registers as `"kind":"interactive"`, same as a normal session. Identify workers by `name`, not `kind`. |
+| Is `sessionId` per-process? | **No — it is inherited from the parent environment.** Every worker spawned by a foreman reported the *foreman's* `sessionId`. **Never key a worker on `sessionId`;** use `pid` or `name`. |
+
+One environment note from the same probes: with the dispatch sandbox blob, `claude -p` **refuses to
+start** where `bubblewrap` and `socat` are absent — `sandbox.failIfUnavailable` failing closed, as
+designed (`bin/dispatch:339`). The process still writes a registry entry before exiting non-zero, so
+a registry entry alone does not mean a worker is healthy.
+
+Because the socket disappears when the worker exits, **foreman→worker steering is inherently a
+race**: `dispatch tell` would have to handle "worker already gone" as a normal outcome, falling back
+to the prompt-append path `rework` already uses (`bin/dispatch:930`).
 
 Three changes would be needed, none of them written here:
 
@@ -222,8 +246,9 @@ each other."* Consequences for dispatch:
    Gemini, and Kimi workers.
 3. If a foreman-facing channel is wanted, build the **inverted, worker-sends design** — `--name`,
    `crossSessionInbound: accept` on the worker's `--settings`, foreman session name in `meta`, and a
-   reporting instruction in `prompt.base.txt`. It is supported, needs no reverse engineering, and is
-   roughly three small edits.
+   reporting instruction in `prompt.base.txt`. It is supported, needs no reverse engineering, is
+   roughly three small edits, and its load-bearing assumption — that a `-p` worker has `SendMessage`
+   and binds an inbox — is verified above rather than assumed.
 4. Gate any of it behind an explicit flag. Point 3 changes the worker's isolation posture, and this
    tool's users chose it partly *because* the worker is confined and non-interactive.
 5. Treat the `bypassPermissions`-foreman hold-then-drop behavior as the primary documentation
@@ -231,15 +256,20 @@ each other."* Consequences for dispatch:
 
 ## Open questions
 
+Resolved by the probes above: a `-p` worker binds a socket, has `SendMessage`/`ListAgents`, honors
+`--name`, registers as `kind: "interactive"`, and inherits its parent's `sessionId`.
+
+Still open:
+
 - `[VERIFY]` Whether the full `env-vars` table documents a payload format for
   `CLAUDE_CODE_MESSAGING_SOCKET`. The upstream page truncates before that row.
 - `[VERIFY]` Whether a detached grandchild (`nohup bash run.sh &`) still satisfies own-child
   verification at notify time, on Linux and on macOS. Untested; only matters if point 1 is revisited.
-- `[VERIFY]` What `kind` a `claude -p` worker registers as in `~/.claude/sessions/<pid>.json`
-  (`"interactive"` was observed for this session). If `-p` is distinguishable, dispatch could
-  identify its own workers from the registry.
-- `[VERIFY]` Whether `SendMessage` is reachable from a worker under
-  `--permission-mode acceptEdits` with the sandbox blob at `bin/dispatch:339`, or whether it prompts.
-  This is the one assumption the inverted design rests on and it should be tested before building.
+- `[VERIFY]` Whether `SendMessage` behaves identically **with the sandbox blob applied**. The tool is
+  present in an unsandboxed `-p` run, but this container lacks `bubblewrap`/`socat`, so the sandboxed
+  variant could not be started here. Retest on a machine with both installed before building.
+- `[VERIFY]` End-to-end delivery of a worker→foreman message, including what the foreman actually
+  sees, and the `bypassPermissions` hold-then-expire path. Requires two cooperating sessions on one
+  machine with a working sandbox.
 - Unresolved by design: nothing here gives Codex, Gemini, or Kimi workers a foreman channel. Any
   feature built on this is Claude-worker-only, in a tool whose premise is cross-provider.
