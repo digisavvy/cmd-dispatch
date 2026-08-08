@@ -144,7 +144,7 @@ Because the socket disappears when the worker exits, **foreman→worker steering
 race**: `dispatch tell` would have to handle "worker already gone" as a normal outcome, falling back
 to the prompt-append path `rework` already uses (`bin/dispatch:930`).
 
-Three changes would be needed, none of them written here:
+Three changes were identified, and are what shipped (see `cmd_start` in `bin/dispatch`):
 
 1. **Name the worker.** `claude -p … --name dispatch-issue-<n>` at `bin/dispatch:336`, so the
    foreman can address it deterministically instead of relying on a `cwd`-derived name like
@@ -185,11 +185,11 @@ is what keeps the docs honest as providers come and go:
 - A **silent** worker does not. The foreman learns the job ended from `dispatch status`,
   `dispatch wait`, or the user.
 
-**Today every worker is silent**, including `claude` ones — nothing in `bin/dispatch` sends
-anything to a foreman. Reporting is the state this issue proposes adding, available only where the
-worker has an inbox:
+**When this was written every worker was silent**, including `claude` ones — nothing in
+`bin/dispatch` sent anything to a foreman. Reporting is the state issue #58 proposed and #59
+shipped, available only where the worker has an inbox:
 
-| Provider | Today | With this change |
+| Provider | Before | Since #59 |
 |---|---|---|
 | `claude` | silent | **reporting** (opt out with `--no-report`) |
 | `codex` | silent | silent |
@@ -202,8 +202,8 @@ whatever the user picks. That framing survives a fifth provider without renaming
 **This axis is orthogonal to the gate modes.** `claude-solo`, `verified`, and `dealer's choice`
 (`docs/modes.md`) all answer *who reviews the work*. Reporting answers *how the foreman finds out
 the job finished*. Every combination is valid — `verified` with a reporting worker, `claude-solo`
-with a silent one. When this ships, `docs/modes.md` gets a **separate section** for it; adding a
-fourth name to the existing list would read as a four-item menu you pick one of, which it is not.
+with a silent one. That is why `docs/modes.md` documents it as a **separate section** rather than a
+fourth name in the existing list, which would read as a four-item menu you pick one of.
 
 ## What this would change in the existing docs
 
@@ -217,8 +217,8 @@ provider-conditional rather than flatly true:
 - `skills/dispatch/SKILL.md:105` — *"you cannot steer one mid-run — kill and re-dispatch."* Same
   qualification.
 
-`docs/notifications.md` would gain the channel; `README.md`'s notifications section would need a
-line; `SECURITY.md` would need the trust discussion below.
+`docs/notifications.md` gained the channel; `README.md`'s notifications section gained its line;
+`SECURITY.md` carries the trust discussion below.
 
 ## Security implications
 

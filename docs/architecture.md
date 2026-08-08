@@ -24,9 +24,11 @@ codex exec -C "$worktree" -m "$model" --sandbox workspace-write --add-dir "$gitc
 
 The `--add-dir` path points at the repository's Git common directory so the worker can commit from a linked worktree while running in the workspace-write sandbox.
 
-Claude runs with the worktree as cwd, stream JSON, `--add-dir "$gitcommon"`, and `--dangerously-skip-permissions`; the isolated worktree and foreman review provide the same trust boundary. Gemini has an unverified runner template only.
+Claude runs with the worktree as cwd, stream JSON, `--add-dir "$gitcommon"`, `--permission-mode acceptEdits`, and a `--settings` blob enabling Claude Code's native OS sandbox (see [isolation-research.md](isolation-research.md)). When the job is a reporting one, the invocation also carries `--name dispatch-issue-<n>` and `"crossSessionInbound":"accept"` in that same blob; with `--no-report`, or when the foreman is not addressable, the invocation is byte-identical to a pre-reporting one (see [modes.md](modes.md)). Gemini has an unverified runner template only.
 
-The shell pid from the background `nohup bash "$jobdir/run.sh"` process is written to `pid`. When `codex exec` exits, `run.sh` writes the exit code to `exitcode`, then appends a `finish` line to the ledger and calls `dispatch notify <n> <state> -R <repo>` through the resolved dispatch bin. Both are additive and fire only after `exitcode` is on disk, so a wedged append or notification channel can never block the worker or the foreman's polling loop. The notification (terminal bell, macOS banner, optional `DISPATCH_NOTIFY_CMD` hook) is described in [usage.md](usage.md). `dispatch stop` writes the `killed` sentinel to `exitcode` and logs its own `stop` line, so a stopped job never also reports `finish`.
+The shell pid from the background `nohup bash "$jobdir/run.sh"` process is written to `pid`. When the worker exits, `run.sh` writes the exit code to `exitcode`, then appends a `finish` line to the ledger and calls `dispatch notify <n> <state> -R <repo>` through the resolved dispatch bin. Both are additive and fire only after `exitcode` is on disk, so a wedged append or notification channel can never block the worker or the foreman's polling loop. The notification (terminal bell, macOS banner, optional `DISPATCH_NOTIFY_CMD` hook) is described in [usage.md](usage.md). `dispatch stop` writes the `killed` sentinel to `exitcode` and logs its own `stop` line, so a stopped job never also reports `finish`.
+
+One channel deliberately sits outside that sequence: a reporting `claude` worker messages the foreman session from **inside** its own run, before it exits — so before `exitcode` exists. The exit-code-first guarantee covers the `run.sh`-fired channels only; the report's ordering, worst case, and bounds are stated in [notifications.md](notifications.md#ordering).
 
 ## Event Streams
 
@@ -75,6 +77,8 @@ worktree=<absolute worktree path>
 base_sha=<commit the worker starts from>
 gate=<0|1>
 gate_model=<gate model alias>
+report=<0|1, 1 only for a claude worker with a resolved foreman>
+foreman=<foreman session name, empty when report=0>
 attempt=<current attempt, from 1>
 max_attempts=<rework ceiling, 1-3>
 started_at=<UTC timestamp>
