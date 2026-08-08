@@ -45,7 +45,7 @@ Checks core dependencies, reports Codex, Claude, and Gemini paths/versions in a 
 dispatch doctor
 ```
 
-### `dispatch start <issue#> <model> [-R repo] [--gate] [--gate-model alias] [--max-attempts N]`
+### `dispatch start <issue#> <model> [-R repo] [--no-report] [--gate] [--gate-model alias] [--max-attempts N]`
 
 Starts one worker for one GitHub issue. `dispatch` fetches the issue title/body with `gh issue view`, creates a worktree at `../<repo>-wt-issue-<n>`, creates branch `dispatch/issue-<n>`, writes job state under `.dispatch/jobs/<n>/`, and launches the selected provider CLI with `nohup`.
 
@@ -64,6 +64,14 @@ Only one job directory may exist per issue. To redo an issue, stop or clean the 
 The automatic merge gate is off by default. `--gate` runs it in the background after a successful
 worker exit. `--gate-model` selects its model alias and defaults to `opus`; it is only valid with
 `--gate`.
+
+`--no-report` makes a `claude` worker **silent**: it drops the `--name dispatch-issue-<n>` flag, the
+`crossSessionInbound` acceptance, and the reporting instruction, restoring the previous invocation
+exactly. Without it, a `claude` worker messages the foreman's session when it finishes and can be
+steered mid-run. The flag is accepted for every provider but only affects `claude`, since no other
+provider has an inbox. `dispatch start` prints `reporting: on` or `reporting: off` so there is no
+ambiguity about which you got. See
+[modes.md](modes.md#a-second-axis-reporting-and-silent-workers).
 
 `--max-attempts` bounds automatic rework on a gate rejection. It defaults to `1` (reject holds the
 job, as before), accepts at most `3`, and is only valid with `--gate`. With a higher value, a

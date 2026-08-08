@@ -102,7 +102,15 @@ issue explicitly authorizes them.
 - **Report failures/blockers first.** Surface a stuck or FAILED worker before wins.
 - **One job per issue.** Redo = `clean` then `start`.
 - **Never invent model strings** — only aliases from `dispatch models`.
-- Workers run non-interactively in isolated worktrees; you cannot steer one mid-run — kill and re-dispatch.
+- Workers run non-interactively in isolated worktrees. **Steering is `claude`-only:** a reporting
+  `claude` worker is addressable as `dispatch-issue-<n>`, so you can `SendMessage` it a correction
+  mid-run (resend with the `[ref]` the error quotes; "already gone" is normal — fall back to
+  `dispatch rework`). For codex/gemini/kimi workers, and any `--no-report` worker, you still cannot
+  steer — kill and re-dispatch.
+- A `claude` worker messages you when it finishes; other providers do not. Do not wait on a message
+  from a codex/gemini/kimi worker — poll `dispatch status` or use `dispatch wait`. If you run in
+  `bypassPermissions`, do not rely on reports: they are held rather than delivered, and were
+  measured never to arrive at a non-interactive foreman (see docs/modes.md for the exact scope).
 - State lives in `<repo>/.dispatch/`; it survives crashes and new sessions.
 
 ## Gotchas baked into the tool (don't re-solve)

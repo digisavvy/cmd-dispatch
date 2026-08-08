@@ -10,7 +10,7 @@
 #   dispatch models                       List model aliases -> real slugs + descriptions
 #   dispatch usage [--json] [--probe|--live] Show provider subscription usage and reset windows
 #   dispatch report [--since YYYY-MM-DD] [-R repo] Show approvals per worker alias from the ledger
-#   dispatch start <issue#> <model> [-R repo]   Spawn a worker on an issue
+#   dispatch start <issue#> <model> [-R repo] [--no-report]  Spawn a worker on an issue
 #   dispatch status [issue#] [options]    Show all jobs (or one) with live state
 #   dispatch wait <issue#> [options]       Block until a job finishes
 #   dispatch logs <issue#> [-f] [--raw|--events]  Tail worker output
@@ -179,6 +179,14 @@ last_event() {
   render_event "$jd" "$line"
 }
 
+# True when <have> is at least <want>, comparing dotted numeric versions.
+ver_ge() { # ver_ge <have> <want>
+  [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" == "$2" ]]
+}
+
+# Claude Code release that added cross-session messaging, which reporting workers require.
+MESSAGING_MIN="2.1.224"
+
 cmd_doctor() {
   local ok=1
   echo "dispatch $VERSION — doctor"
@@ -219,24 +227,94 @@ cmd_doctor() {
   else
     echo "    MISSING — copy models.conf.example -> models.conf"; ok=0
   fi
+  # Reporting is optional, so nothing here clears `ok`: every "off" degrades to a silent worker
+  # and the unchanged bell/banner/DISPATCH_NOTIFY_CMD path, which is exactly today's behavior.
+  echo
+  echo "Cross-session messaging (reporting claude workers):"
+  local cver disabled_by v fname
+  if command -v claude >/dev/null 2>&1; then
+    cver="$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    if [[ -z "$cver" ]]; then
+      echo "  ?    claude version not parseable — cannot check the $MESSAGING_MIN floor"
+    elif ver_ge "$cver" "$MESSAGING_MIN"; then
+      # The floor comes from the upstream docs, not from measurement, and a running $MESSAGING_MIN
+      # session was observed with no inbox — so this row reports the floor, never capability. The
+      # addressability row below is the authoritative check.
+      echo "  ok   claude $cver meets the documented $MESSAGING_MIN floor (not a guarantee on its own)"
+    else
+      echo "  off  claude $cver is below $MESSAGING_MIN — workers cannot report"
+    fi
+  else
+    echo "  off  claude not installed — only claude workers can report"
+  fi
+  disabled_by=""
+  for v in CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC DISABLE_TELEMETRY DO_NOT_TRACK DISABLE_GROWTHBOOK; do
+    [[ -n "${!v:-}" ]] && disabled_by="${disabled_by:+$disabled_by }$v"
+  done
+  if [[ -n "$disabled_by" ]]; then
+    echo "  off  messaging is silently disabled by: $disabled_by"
+    echo "       unset these for the foreman's shell; reporting fails with no error otherwise"
+  else
+    echo "  ok   no privacy env var disables messaging"
+  fi
+  if fname="$(foreman_name 2>/dev/null)"; then
+    echo "  ok   this session is addressable as '$fname' — workers started here can report to it"
+  else
+    echo "  off  this session has no messaging inbox — workers started here will be silent"
+  fi
+  echo "       Run the foreman in a prompting mode. A bypassPermissions foreman holds reports"
+  echo "       instead of delivering them, and the worker still sees its send succeed"
+  echo "       (docs/modes.md)."
   echo
   [[ "$ok" == 1 ]] && echo "Ready." || echo "Not ready — resolve the MISS/MISSING items above."
   [[ "$ok" == 1 ]]
 }
 
+# The foreman is the Claude Code session that ran `dispatch start`. Claude Code exports its inbox
+# socket to Bash as CLAUDE_CODE_MESSAGING_SOCKET (/tmp/cc-socks/<pid>.sock) and registers the same
+# session under that pid in ~/.claude/sessions/<pid>.json, so the pid bridges the two.
+#
+# This must run in the foreman's own shell: inside a worker the variable is re-exported to the
+# WORKER's own socket, so a worker cannot discover its foreman. sessionId is never a usable key —
+# it is inherited from the parent environment, so every worker reports the foreman's own.
+# See docs/messaging-research.md. Fails (non-zero) whenever the name cannot be established, which
+# is the common case for a foreman with messaging unavailable; callers degrade to a silent worker.
+foreman_name() {
+  local sock pid entry name
+  sock="${CLAUDE_CODE_MESSAGING_SOCKET:-}"
+  [[ -n "$sock" ]] || return 1
+  pid="$(basename "$sock")"; pid="${pid%.sock}"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  entry="$HOME/.claude/sessions/$pid.json"
+  [[ -r "$entry" ]] || return 1
+  name="$(jq -r '.name // empty' "$entry" 2>/dev/null)" || return 1
+  [[ -n "$name" ]] || return 1
+  # This is the one place a session name — external data, derived from a directory basename a user
+  # controls — enters job state, so it is validated here, mirroring how notify_title_scrub guards
+  # the issue title. `meta` is line-based, so a newline would forge later keys: a name of
+  # $'x\nattempt=99' writes an attempt= line that meta_get's `grep | head -1` would resolve ahead of
+  # the real one. A double quote would garble the quoted name in the REPORTING prompt. Reject rather
+  # than scrub — a name carrying either is not addressable anyway, so the worker goes silent, which
+  # is the safe direction. Spaces and non-ASCII are left alone: they are legal in a session name and
+  # rejecting them would silently disable reporting for ordinary repositories.
+  [[ "$name" =~ ^[^[:cntrl:]\"]+$ && ${#name} -le 128 ]] || return 1
+  printf '%s' "$name"
+}
+
 cmd_start() {
   local n="" alias="" repo="." gate=0 gate_model="opus" gate_model_set=0
-  local max_attempts=1 max_attempts_set=0
+  local max_attempts=1 max_attempts_set=0 report=1
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -R|--repo) [[ $# -gt 1 ]] || die "$1 requires a path"; repo="$2"; shift 2 ;;
+      --no-report) report=0; shift ;;
       --gate) gate=1; shift ;;
       --gate-model) [[ $# -gt 1 ]] || die "--gate-model requires an alias"; gate_model="$2"; gate_model_set=1; shift 2 ;;
       --max-attempts) [[ $# -gt 1 ]] || die "--max-attempts requires a number"; max_attempts="$2"; max_attempts_set=1; shift 2 ;;
       *) if [[ -z "$n" ]]; then n="$1"; elif [[ -z "$alias" ]]; then alias="$1"; else die "unexpected argument: $1"; fi; shift ;;
     esac
   done
-  [[ -n "$n" && -n "$alias" ]] || die "usage: dispatch start <issue#> <model> [-R repo] [--gate] [--gate-model alias] [--max-attempts N]"
+  [[ -n "$n" && -n "$alias" ]] || die "usage: dispatch start <issue#> <model> [-R repo] [--no-report] [--gate] [--gate-model alias] [--max-attempts N]"
   validate_issue "$n"
   [[ "$gate" == 1 || "$gate_model_set" == 0 ]] || die "--gate-model requires --gate"
   # Rework only has findings to feed back when a gate produced them.
@@ -245,6 +323,7 @@ cmd_start() {
   need gh; need git; need jq
 
   local root sd jd provider model resolved branch wt issue_json title body gitcommon dispatch_bin base_sha meta_title
+  local foreman="" claude_settings claude_report_flags=""
   root="$(repo_root "$repo")"
   sd="$root/.dispatch"; jd="$sd/jobs/$n"
   dispatch_bin="$SELF_BIN"
@@ -255,6 +334,28 @@ cmd_start() {
   command -v "$provider" >/dev/null 2>&1 || die "$provider not installed"
   branch="dispatch/issue-$n"
   wt="$(cd "$root/.." && pwd)/$(basename "$root")-wt-issue-$n"
+
+  # Reporting is claude-only: no other provider binds an inbox, so codex/gemini/kimi workers stay
+  # silent and their run.sh generation below is untouched. A claude worker also stays silent when
+  # --no-report is given, or when the foreman has no addressable name (messaging unavailable,
+  # disabled by a privacy env var, or a containerised foreman that cannot reach this machine).
+  # The unchanged bell/banner/DISPATCH_NOTIFY_CMD path is the only channel in every silent case.
+  claude_settings='{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":[]},"credentials":{"files":[{"path":"~/.ssh","mode":"deny"},{"path":"~/.aws","mode":"deny"}]}}}'
+  if [[ "$report" == 1 && "$provider" == "claude" ]]; then
+    foreman="$(foreman_name || true)"
+  fi
+  if [[ -n "$foreman" ]]; then
+    # --name makes the worker addressable as dispatch-issue-<n> instead of a cwd-derived name.
+    # crossSessionInbound:accept is what makes that address usable: a -p session cannot show the
+    # approval dialog, so without it any foreman->worker message is held forever. It rides on
+    # --settings, never the target repo's project settings, which would apply to every peer
+    # message in that repo including the foreman's own. Opting out restores the invocation exactly.
+    # Leading space, so an opt-out worker's command line is byte-identical to the pre-reporting one.
+    claude_report_flags=" --name dispatch-issue-$n"
+    claude_settings='{"crossSessionInbound":"accept","sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":[]},"credentials":{"files":[{"path":"~/.ssh","mode":"deny"},{"path":"~/.aws","mode":"deny"}]}}}'
+  else
+    report=0
+  fi
 
   issue_json="$(cd "$root" && gh issue view "$n" --json number,title,body 2>/dev/null)" \
     || die "could not fetch issue #$n via gh (wrong repo, or not authed?)"
@@ -288,6 +389,31 @@ RULES:
 - Commit your work in one or more commits, each with a clear message that references #$n. Do NOT push and do NOT open a PR — the lead reviews and merges.
 - If the issue is ambiguous or you get blocked, stop and explain the blocker in your final message rather than guessing.
 EOF
+
+  # A reporting worker tells the foreman session it finished. Note the ordering caveat: the worker
+  # sends this itself, so unlike `dispatch notify` it goes out BEFORE the process exits and before
+  # exitcode is written. run.sh's own exitcode -> ledger -> notify sequence is untouched, and the
+  # on-disk state stays the source of truth; the instruction bounds the cost to one best-effort send
+  # by making a failed send explicitly not a task failure. See docs/notifications.md.
+  # The two-step addressing below is not defensive padding — SendMessage refuses a bare name for a
+  # session it did not spawn and answers with the exact ref to retry with, which the worker cannot
+  # know in advance (docs/messaging-research.md).
+  if [[ "$report" == 1 ]]; then
+    cat >> "$jd/prompt.base.txt" <<EOF
+
+REPORTING:
+- When you have finished everything this prompt asks of you — including any review feedback that
+  appears later in it — and made your final commit, send one status line to the foreman session
+  named "$foreman" using the SendMessage tool. Send it last, after all other work. If SendMessage is
+  not in your tool list yet, load it first with ToolSearch("select:SendMessage").
+- Send exactly one message: "#$n DONE — <one sentence on what you changed>", or
+  "#$n BLOCKED — <one sentence on the blocker>" if you stopped early.
+- The first attempt may be refused with "is not an agent in this conversation", quoting an exact
+  ref such as "$foreman [a1b2c3]". That is expected: send once more using that exact quoted ref.
+- Reporting is best-effort and is NOT part of the task. If it still fails, or no such session is
+  reachable, do not retry further, do not report it as a problem, and finish normally.
+EOF
+  fi
   cp "$jd/prompt.base.txt" "$jd/prompt.txt"
 
   git -C "$root" worktree add -b "$branch" "$wt" >/dev/null 2>&1 \
@@ -335,8 +461,8 @@ EOF
 # allowUnsandboxedCommands:false fail closed. See docs/isolation-research.md.
 ( cd "$wt" && claude -p "\$(cat "$jd/prompt.txt")" --model "$model" \\
     --output-format stream-json --verbose --add-dir "$gitcommon" \\
-    --permission-mode acceptEdits \\
-    --settings '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":[]},"credentials":{"files":[{"path":"~/.ssh","mode":"deny"},{"path":"~/.aws","mode":"deny"}]}}}' ) \\
+    --permission-mode acceptEdits$claude_report_flags \\
+    --settings '$claude_settings' ) \\
   > "$jd/events.jsonl" 2> "$jd/worker.log"
 worker_ec=\$?
 jq -r 'select(.type=="result") | .result // .text // empty' "$jd/events.jsonl" | tail -1 > "$jd/last_message.txt"
@@ -417,6 +543,8 @@ worktree=$wt
 base_sha=$base_sha
 gate=$gate
 gate_model=$gate_model
+report=$report
+foreman=$foreman
 attempt=1
 max_attempts=$max_attempts
 started_at=$(now)
@@ -429,6 +557,11 @@ EOF
 
   echo "started #$n  ->  provider=$provider model=$model (alias $alias)  branch=$branch  pid=$(cat "$jd/pid")"
   echo "worktree: $wt"
+  if [[ "$report" == 1 ]]; then
+    echo "reporting: on  — this worker will message foreman session '$foreman' when it finishes"
+  else
+    echo "reporting: off — silent worker; use dispatch status/wait, bell, or banner"
+  fi
   echo "watch:    dispatch status $n   |   dispatch logs $n -f"
 }
 
