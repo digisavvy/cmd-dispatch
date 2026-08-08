@@ -172,6 +172,35 @@ workflow — gets job notifications **held**, and a hold left unanswered for fiv
 never arrives. Any implementation must state the recommended foreman configuration rather than
 leaving it to chance.
 
+## Vocabulary: reporting and silent workers
+
+The provider asymmetry is not a blocker. It is a second axis with two named states, and naming it
+is what keeps the docs honest as providers come and go:
+
+- A **reporting** worker messages the foreman session when it finishes.
+- A **silent** worker does not. The foreman learns the job ended from `dispatch status`,
+  `dispatch wait`, or the user.
+
+**Today every worker is silent**, including `claude` ones — nothing in `bin/dispatch` sends
+anything to a foreman. Reporting is the state this issue proposes adding, available only where the
+worker has an inbox:
+
+| Provider | Today | With this change |
+|---|---|---|
+| `claude` | silent | **reporting** (opt out with `--no-report`) |
+| `codex` | silent | silent |
+| `gemini` | silent | silent |
+| `kimi` | silent | silent |
+
+These names describe **the worker**, not a mode the user selects — a Codex worker cannot report
+whatever the user picks. That framing survives a fifth provider without renaming anything.
+
+**This axis is orthogonal to the gate modes.** `claude-solo`, `verified`, and `dealer's choice`
+(`docs/modes.md`) all answer *who reviews the work*. Reporting answers *how the foreman finds out
+the job finished*. Every combination is valid — `verified` with a reporting worker, `claude-solo`
+with a silent one. When this ships, `docs/modes.md` gets a **separate section** for it; adding a
+fourth name to the existing list would read as a four-item menu you pick one of, which it is not.
+
 ## What this would change in the existing docs
 
 Two current claims become provider-conditional rather than flatly true, and should not be edited
