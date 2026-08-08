@@ -1,8 +1,9 @@
 # Getting Started
 
-A 5-minute walkthrough of *using* cmd-dispatch. Already installed? Good — if not, see
-[Usage → Install](usage.md#install). This assumes your provider CLIs are logged in
-(`dispatch doctor` will tell you).
+A 5-minute walkthrough of *using* cmd-dispatch. Already installed? Good — if not, the
+[Quickstart](quickstart.md) covers install through first PR, and
+[Why cmd-dispatch?](why-dispatch.md) explains the concept in plain words. This assumes your
+provider CLIs are logged in (`dispatch doctor` will tell you).
 
 ## The mental model
 

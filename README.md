@@ -5,6 +5,10 @@ and say *"put sonnet on #41, 5.6 on the other two"* — it spawns one headless *
 per GitHub issue, using the provider implied by the model alias. Each gets its own git worktree/branch,
 and the lead reviews before anything merges. We can use the merge gate of our choice to determine tasks and what's done and what gets merged. The idea is that the most capable agent sets the tone and verifies the work before merging it in.
 
+New here? Two short reads: [**Why cmd-dispatch?**](docs/why-dispatch.md) explains the idea and the
+value without the jargon, and the [**Quickstart**](docs/quickstart.md) takes you from nothing to
+your first reviewed PR.
+
 This is deliberately **not** a framework. It's a small CLI (`bin/dispatch`) plus a slash command
 (`/dispatch`). The conversational steering — *"kill #52, give it to 5.6"* — is the whole point; the moment
 it becomes a config-driven autonomous loop, it's just a worse [zeroshot](https://github.com/the-open-engine/zeroshot).
@@ -102,9 +106,11 @@ one — and the worker still sees its send succeed either way.
 
 ## Documentation
 
+- [Why cmd-dispatch?](docs/why-dispatch.md) - the concept and the value, in plain words (new? start here)
+- [Quickstart](docs/quickstart.md) - zero to your first reviewed PR, copy-paste
 - [Agent conventions](AGENTS.md) - the foreman, worker, review, and pull-request contract
 - [Security](SECURITY.md) - trust model, residual worker risks, and safe-use guidance
-- [Getting started](docs/getting-started.md) - a 5-minute walkthrough of using it (start here)
+- [Getting started](docs/getting-started.md) - a fuller 5-minute walkthrough of using it
 - [Usage](docs/usage.md) - install, CLI commands, `/dispatch`, and model aliases
 - [Foreman modes](docs/modes.md) - claude-solo, verified, and dealer's choice with worked examples
 - [Merge gate](docs/gate.md) - opt-in headless review and its approval contract
