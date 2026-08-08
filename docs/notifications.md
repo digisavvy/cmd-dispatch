@@ -11,6 +11,13 @@ The merge gate sends its own notifications on every verdict: `APPROVE` (with the
 `REJECT` (pointing at the saved report), and `REWORK` when a rejection is fed back to the worker
 for another attempt (see [gate.md](gate.md)).
 
+Every channel here targets a **human**: the terminal bell, the macOS banner, and whatever
+`DISPATCH_NOTIFY_CMD` routes to. None of them reach the *foreman Claude session* that started the
+job. A foreman still learns a job finished only by being told, or by polling `dispatch status` —
+which is why `dispatch wait` exists. Claude Code v2.1.224+ cross-session messaging could close that
+gap for `claude` workers, but nothing here uses it; see
+[messaging-research.md](messaging-research.md) for the design and its constraints.
+
 ## Banner layout
 
 A banner reliably shows only its first lines, so the notification is split across
