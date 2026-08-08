@@ -1,7 +1,11 @@
 # Cross-session messaging for the dispatch foreman
 
-Research date: 2026-08-08. Research only — no behavior changed by this note. Nothing in `bin/dispatch`,
-the skill, or the commands was modified.
+Research date: 2026-08-08. This note was research only; the design it recommends **has since shipped**
+as reporting workers (issue #58). For how the feature behaves, read
+[modes.md](modes.md#a-second-axis-reporting-and-silent-workers) — this note is kept as the record of
+why it is built the way it is, and of the negative finding that rules out the obvious alternative.
+See [Open questions](#open-questions) for what the pre-build probes confirmed and what is still
+unverified.
 
 Claude Code v2.1.224 added [cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging):
 one Claude Code session can deliver a plain-text message to another. The obvious fit for dispatch is
@@ -203,8 +207,8 @@ fourth name to the existing list would read as a four-item menu you pick one of,
 
 ## What this would change in the existing docs
 
-Two current claims become provider-conditional rather than flatly true, and should not be edited
-until the feature actually ships:
+**These edits have been made** — the list is kept for traceability. Two claims became
+provider-conditional rather than flatly true:
 
 - `docs/limitations.md:6` — *"No mid-run steering channel. To change direction, stop/clean the job
   and start a new one."* For **`claude` workers only**, a live steering channel is now possible.
@@ -288,17 +292,48 @@ each other."* Consequences for dispatch:
 Resolved by the probes above: a `-p` worker binds a socket, has `SendMessage`/`ListAgents`, honors
 `--name`, registers as `kind: "interactive"`, and inherits its parent's `sessionId`.
 
+Resolved by a second round of probes on macOS (Seatbelt, Claude Code 2.1.226), run before the
+feature was built:
+
+- **`SendMessage` with the sandbox blob applied: works.** The sandboxed `claude -p` starts on macOS
+  (Seatbelt needs no `bubblewrap`/`socat`), lists both `SendMessage` and `ListAgents` in its `init`
+  tool list, and sends successfully.
+- **End-to-end worker→foreman delivery: works.** A prompting foreman received the message *mid-
+  session*, unprompted, attributed to the worker's session name.
+- **A non-interactive `bypassPermissions` foreman is worse than "held": it is silent.** The worker's
+  send returned `{"success":true,"msg_id":…}` and the message was never delivered. No error on
+  either side. This measures only the non-interactive case — the receiver could not display a
+  dialog, which is precisely why nothing arrived; the interactive path is still open below. The fix
+  is prescriptive either way, in `docs/modes.md`: run the foreman in a prompting mode. Note this
+  refines the derived delivery matrix above, which assumed the dialog could always be answered.
+- **Foreman→worker steering: works.** A message sent to a running sandboxed worker with
+  `crossSessionInbound: accept` arrived mid-run and changed what it produced.
+
+Two findings that were not anticipated and that any implementation must handle:
+
+- **A bare name is refused for a session you did not spawn.** `SendMessage` answers
+  `'<name>' is not an agent in this conversation. Re-send with the ref to confirm you mean:
+  <name> [a1b2c3]`. The ref is not knowable in advance, so the sender must retry with the quoted ref
+  from the error. Reproduced in both directions. The worker's reporting instruction says so
+  explicitly, because a worker that gave up after one refusal would fail silently.
+- **`CLAUDE_CODE_MESSAGING_SOCKET` is re-exported per session.** Inside a worker it points at the
+  *worker's own* socket (verified: it matched the worker's own `CLAUDE_PID`), so a worker cannot
+  discover its foreman from the environment. The name must be resolved in the foreman's own shell at
+  `dispatch start` — `/tmp/cc-socks/<pid>.sock` → `~/.claude/sessions/<pid>.json` → `.name` — and
+  baked into the prompt. This is what `foreman_name()` in `bin/dispatch` does.
+
 Still open:
 
 - `[VERIFY]` Whether the full `env-vars` table documents a payload format for
   `CLAUDE_CODE_MESSAGING_SOCKET`. The upstream page truncates before that row.
 - `[VERIFY]` Whether a detached grandchild (`nohup bash run.sh &`) still satisfies own-child
   verification at notify time, on Linux and on macOS. Untested; only matters if point 1 is revisited.
-- `[VERIFY]` Whether `SendMessage` behaves identically **with the sandbox blob applied**. The tool is
-  present in an unsandboxed `-p` run, but this container lacks `bubblewrap`/`socat`, so the sandboxed
-  variant could not be started here. Retest on a machine with both installed before building.
-- `[VERIFY]` End-to-end delivery of a worker→foreman message, including what the foreman actually
-  sees, and the `bypassPermissions` hold-then-expire path. Requires two cooperating sessions on one
-  machine with a working sandbox.
+- `[VERIFY]` Whether an *interactive* `bypassPermissions` foreman is offered an approval dialog it
+  can answer before `dialogExpiry`. The probe's receiver was headless and so could not show one; the
+  recommendation to use a prompting mode is unchanged either way.
+- `[VERIFY]` The v2.1.224 floor is taken from the upstream docs, not measured. On the probe host a
+  running 2.1.224 session had **no** `messagingSocketPath` while a 2.1.226 one did, so the floor
+  alone does not guarantee an addressable foreman. `dispatch` treats an unresolvable foreman as
+  silent rather than assuming a version implies availability.
 - Unresolved by design: nothing here gives Codex, Gemini, or Kimi workers a foreman channel. Any
   feature built on this is Claude-worker-only, in a tool whose premise is cross-provider.

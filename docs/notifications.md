@@ -11,12 +11,57 @@ The merge gate sends its own notifications on every verdict: `APPROVE` (with the
 `REJECT` (pointing at the saved report), and `REWORK` when a rejection is fed back to the worker
 for another attempt (see [gate.md](gate.md)).
 
-Every channel here targets a **human**: the terminal bell, the macOS banner, and whatever
+Every channel described below targets a **human**: the terminal bell, the macOS banner, and whatever
 `DISPATCH_NOTIFY_CMD` routes to. None of them reach the *foreman Claude session* that started the
-job. A foreman still learns a job finished only by being told, or by polling `dispatch status` —
-which is why `dispatch wait` exists. Claude Code v2.1.224+ cross-session messaging could close that
-gap for `claude` workers, but nothing here uses it; see
-[messaging-research.md](messaging-research.md) for the design and its constraints.
+job.
+
+## The foreman channel
+
+A **reporting** `claude` worker closes that gap by messaging the foreman's session directly when it
+finishes. This is a second, independent channel — it does not replace or alter anything above, and
+it exists only for `claude` workers on a local foreman. See [modes.md](modes.md) for the full
+requirements and the `bypassPermissions` trap; the short version:
+
+- `dispatch start` resolves the foreman's session name and bakes it into the worker's prompt. The
+  worker sends one line — `#<n> DONE — …` or `#<n> BLOCKED — …` — as its last action.
+- Opt out per job with `dispatch start <n> <model> --no-report`, which restores the previous
+  invocation exactly.
+- Non-`claude` workers are always silent. Nothing about their notifications changed.
+- Run the foreman in a prompting mode. A `bypassPermissions` foreman **holds the report instead of
+  delivering it** — measured never to arrive at a non-interactive one — and the worker still sees its
+  send succeed either way. See [modes.md](modes.md) for the exact scope of that measurement.
+
+The channel is not a substitute for the human ones. It is best-effort by construction: the worker is
+told that a failed send is not a task failure, so an unreachable, disabled, or renamed foreman costs
+nothing. `dispatch doctor` reports whether reporting is actually available.
+
+### Ordering
+
+The human path is unchanged and still holds its guarantee exactly: `run.sh` writes the worker's
+`exitcode`, then the ledger line, then calls `dispatch notify`. Nothing was inserted into that
+sequence.
+
+The foreman report is different, and the difference is worth stating plainly. The worker sends it
+itself, with its own `SendMessage` tool, so it goes out **before** the worker process exits — and
+therefore before `exitcode` is on disk. There is no way around this: a shell script cannot write to
+a session's inbox (see [messaging-research.md](messaging-research.md)), so the only supported sender
+is the worker's own Claude.
+
+What that does and does not cost:
+
+- It cannot corrupt job state or change a worker's result, and it cannot make a *completed* job look
+  unfinished — the report is one tool call inside a run that was happening anyway.
+- **The worst case is a stalled worker, and it is worth naming.** If the send were to hang rather
+  than fail, the worker session would not exit, so `exitcode` would never be written, `dispatch wait`
+  would keep blocking, and the job would sit `RUNNING` and then read `STALLED`. That is the same
+  failure shape as any other wedged tool call in a worker, and `dispatch status`'s stall detection
+  is what surfaces it. It is *not* covered by the exit-code-first guarantee, because that guarantee
+  only ever covered the channels `run.sh` fires after the worker is already gone.
+- The prompt bounds the exposure rather than eliminating it: exactly one message, at most one retry
+  with the ref, no further attempts, and an explicit instruction that a failed send is not a task
+  failure. `--no-report` removes the exposure entirely, which is one reason the opt-out exists.
+- Every on-disk signal — `exitcode`, the ledger, `dispatch status`, `dispatch wait` — remains the
+  authority on whether a job finished. The report is a convenience, never the source of truth.
 
 ## Banner layout
 

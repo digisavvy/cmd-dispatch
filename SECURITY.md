@@ -40,6 +40,22 @@ sandbox or a substitute for human review. It never merges automatically.
   `~/.ssh` and `~/.aws` are blocked for sandboxed commands. It fails closed (`failIfUnavailable`) and
   the unsandboxed-retry escape hatch is disabled (`allowUnsandboxedCommands: false`). The sandbox
   covers `Bash` only, and its egress proxy allowlists client-supplied hostnames without TLS inspection.
+- **Worker inbound acceptance (reporting workers):** a reporting `claude` worker runs with
+  `crossSessionInbound: accept`, so any process that can reach its inbox socket can inject text into
+  a sandboxed worker mid-run. **This is not judged a change to the trust boundary.** The socket is
+  mode `0600`, owned by and reachable only by your own operating-system user, and anything running as
+  that user could already write the worktree, the prompt, and `.dispatch/` directly — a strictly
+  stronger capability than appending text to a prompt. It is stated here rather than left implicit
+  because the worker is otherwise deliberately confined and non-interactive, and because it is the
+  reason the behavior is opt-out-able: `--no-report` removes the acceptance and the worker's name,
+  restoring the previous invocation exactly. Non-`claude` workers never accept inbound.
+  What such a message cannot do bounds the risk: a peer message can never approve a pending
+  permission prompt, cannot change permissions or `CLAUDE.md`, and any commands in its text arrive as
+  plain text that Claude Code does not execute. The sandbox, the permission prompts, and the
+  no-push/no-merge rule all still apply. Treat an injected message as exactly what the issue body
+  already is — untrusted input to a model, not an enforceable boundary.
+  The acceptance is set on the worker's own `--settings`, never in the target repository's project
+  settings, which would apply it to every peer message in that repository including the foreman's.
 - **Notification execution:** `DISPATCH_NOTIFY_CMD` deliberately executes a trusted local program.
   It is local configuration, not issue-controlled input, and receives issue-derived values only as
   quoted arguments and environment variables. It must name one executable; use a wrapper script for
