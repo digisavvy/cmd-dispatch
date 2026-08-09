@@ -137,7 +137,9 @@ A worker reports only when all of these hold. Otherwise it is silent, and `dispa
 
 - the provider is `claude`, and `--no-report` was not passed;
 - the foreman session has a messaging inbox, so `dispatch` can resolve its name;
-- Claude Code is v2.1.224 or newer, on macOS or Linux (not native Windows);
+- Claude Code is v2.1.224 or newer — the release that introduced
+  [cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging), the
+  session-to-session channel all of this rides on — on macOS or Linux (not native Windows);
 - none of `DISABLE_TELEMETRY`, `DO_NOT_TRACK`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, or
   `DISABLE_GROWTHBOOK` is set — any one of them turns messaging off with no visible signal.
 
