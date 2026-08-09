@@ -46,3 +46,29 @@ relevant cache outside dispatch.
 
 The gate only accepts a job whose current state is `DONE`. Wait for a running job, inspect a failed
 job with `dispatch logs <n>`, or start over with `dispatch clean <n>` followed by `dispatch start`.
+
+## A claude worker finished but the foreman got no report
+
+Reporting is best-effort and most of its failure modes are silent by design, so absence of a report
+never means the job failed — check `dispatch status <n>` first; the exit code on disk is the truth.
+
+Then work through the reasons a report legitimately does not arrive, in likelihood order:
+
+1. **The job was silent to begin with.** `dispatch start` printed `reporting: off` if the worker was
+   codex/gemini/kimi, `--no-report` was passed, or the foreman had no addressable name at start
+   time. `grep report= .dispatch/jobs/<n>/meta` shows what the job recorded.
+2. **The foreman runs in `bypassPermissions`.** Reports are held rather than delivered — measured
+   never to arrive at a non-interactive foreman — while the worker still sees its send succeed. Use
+   a prompting mode (see [modes.md](modes.md)).
+3. **Messaging is disabled by an env var.** `DISABLE_TELEMETRY`, `DO_NOT_TRACK`,
+   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, or `DISABLE_GROWTHBOOK` each turn it off with no
+   visible signal. `dispatch doctor` names the offender.
+4. **The foreman session exited (or its name was recycled) between `start` and the worker
+   finishing.** The send fails or lands elsewhere; the worker finishes normally either way. The
+   name the worker targeted is in `foreman=` in the job's `meta`.
+5. **The worker gave up on the send.** Its transcript is in `.dispatch/jobs/<n>/events.jsonl` —
+   look for the SendMessage tool call near the end; a refusal quoting a `[ref]` followed by no
+   retry means the worker did not follow the retry instruction.
+
+If a *running* worker also cannot be reached for steering, remember its socket disappears at exit —
+"already gone" is a normal outcome, not a fault. Fall back to `dispatch rework` or stop/re-start.

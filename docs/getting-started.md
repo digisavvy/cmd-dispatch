@@ -93,6 +93,12 @@ dispatch stop 52                        # kill a worker (keeps its worktree)
 dispatch clean 52 && dispatch start 52 5.6   # reassign #52 to a different model
 ```
 
+Stop-and-restart is the universal path and the only one for codex/gemini/kimi workers. A running
+**`claude`** worker can additionally be steered live: it is addressable as `dispatch-issue-<n>`,
+and it messages your foreman session when it finishes, so you hear `#41 DONE — …` without polling.
+See [modes.md](modes.md#a-second-axis-reporting-and-silent-workers) for how that works and what it
+requires.
+
 Reassigning is always `clean` then `start` — one job per issue.
 
 ## Check your limits

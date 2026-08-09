@@ -41,6 +41,15 @@ dispatch doctor
 
 Checks core dependencies, reports Codex, Claude, and Gemini paths/versions in a Providers section, and lists configured aliases.
 
+It also reports whether **reporting claude workers** can reach this session: the Claude Code
+version against the documented v2.1.224 messaging floor (advisory — a passing floor is not a
+guarantee on its own), whether any of the four privacy env vars that silently disable messaging is
+set (`DISABLE_TELEMETRY`, `DO_NOT_TRACK`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`,
+`DISABLE_GROWTHBOOK`), and whether the current session is addressable by name. These rows never
+change the `Ready.`/`Not ready` verdict: every "off" just means workers started here will be
+silent, which is the pre-reporting behavior. See
+[modes.md](modes.md#a-second-axis-reporting-and-silent-workers).
+
 ```sh
 dispatch doctor
 ```

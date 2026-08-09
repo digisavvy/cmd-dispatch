@@ -37,8 +37,10 @@ Locally verified against `claude --help`, Claude Code 2.1.170:
 - `--permission-mode` accepts `acceptEdits`, `auto`, `bypassPermissions`, `default`, `dontAsk`, and
   `plan`.
 - `--allowedTools`/`--allowed-tools` and `--disallowedTools`/`--disallowed-tools` exist.
-- `--add-dir` and `--dangerously-skip-permissions` exist. Dispatch currently invokes both, giving
-  the worker access to its worktree and Git common directory while bypassing permission checks.
+- `--add-dir` and `--dangerously-skip-permissions` exist. When this was researched, dispatch
+  invoked both, giving the worker access to its worktree and Git common directory while bypassing
+  permission checks; recommendation 1 below (drop the bypass for `acceptEdits` plus the sandbox)
+  has since shipped and is what `bin/dispatch` does today.
 
 Anthropic documents that `acceptEdits` automatically accepts edits and common filesystem commands
 in the working/additional directories, while `plan` is read-only. More useful for unattended work,

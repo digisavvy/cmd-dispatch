@@ -55,11 +55,19 @@ dispatch logs <issue#> -f  # tail a worker's live output
 
 Summarize state plainly. Don't invent progress — report what `status` shows.
 
+A **reporting `claude` worker** messages this session directly when it finishes (`#<n> DONE — …` /
+`#<n> BLOCKED — …`), so you may hear about completion without anyone polling. Treat the message as
+a doorbell, not the record: confirm with `dispatch status <n>` before acting, and never expect one
+from a codex/gemini/kimi worker or a `--no-report` job — those are silent by design.
+
 ## Steer
 
 - "kill #52" → `dispatch stop 52`
 - "reassign #52 to 5.6" → `dispatch clean 52 && dispatch start 52 5.6`
 - "start over on #41" → `dispatch clean 41 && dispatch start 41 <model>`
+- A mid-run correction that doesn't warrant a restart: a reporting `claude` worker is addressable —
+  `SendMessage` to `dispatch-issue-<n>` (resend with the `[ref]` if the first send is refused).
+  Claude-only; "worker already gone" is a normal outcome — fall back to the options above.
 
 `clean` refuses when the job's branch holds commits that were never PR'd — cleaning would discard
 the worker's only copy. Tell the user what would be lost and let them choose: `dispatch pr <n>` to
