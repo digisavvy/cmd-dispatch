@@ -1,6 +1,7 @@
 # Limitations
 
-`cmd-dispatch` is a thin file-based foreman, not a live multi-agent runtime. Current limitations are:
+`cmd-dispatch` is a thin file-based foreman, not a live multi-agent runtime. For what each worker can
+and cannot do per provider, see [capabilities.md](capabilities.md). Current limitations are:
 
 - No live-session attach. Workers run through headless `codex exec`, not an interactive Codex session.
 - Mid-run steering is `claude`-only, and there is no `dispatch` command for it. A reporting `claude` worker is addressable as `dispatch-issue-<n>`, so a **local** foreman can message it directly with its own `SendMessage` tool and change what it does mid-run. It is racy — the worker's socket vanishes when it exits, so "already gone" is a normal outcome and the fallback is `dispatch rework`. Codex, Gemini, and Kimi workers have no inbox at all: for them, and for any worker started with `--no-report`, the limitation is absolute — stop/clean the job and start a new one. See [modes.md](modes.md) for the requirements and `docs/messaging-research.md` for the delivery rules and why the obvious shell-script implementation is not viable.

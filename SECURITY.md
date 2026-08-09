@@ -12,6 +12,9 @@ Inspect the commit and worktree before running `dispatch pr`. The optional headl
 review effort but processes the same untrusted issue and diff with another model; it is not a
 sandbox or a substitute for human review. It never merges automatically.
 
+For a per-provider breakdown of what each worker can and cannot do (sandbox, network, credentials,
+tools), see [docs/capabilities.md](docs/capabilities.md).
+
 ## Residual risks
 
 - **Prompt injection:** GitHub issue titles and bodies are untrusted text embedded in worker and

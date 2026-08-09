@@ -114,6 +114,7 @@ one — and the worker still sees its send succeed either way.
 - [Quickstart](docs/quickstart.md) - zero to your first reviewed PR, copy-paste
 - [Agent conventions](AGENTS.md) - the foreman, worker, review, and pull-request contract
 - [Security](SECURITY.md) - trust model, residual worker risks, and safe-use guidance
+- [Worker capabilities & sandboxing](docs/capabilities.md) - per-provider sandbox matrix and what tools workers do/don't have
 - [Getting started](docs/getting-started.md) - a fuller 5-minute walkthrough of using it
 - [Usage](docs/usage.md) - install, CLI commands, `/dispatch`, and model aliases
 - [Foreman modes](docs/modes.md) - claude-solo, verified, and dealer's choice with worked examples
