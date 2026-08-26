@@ -12,6 +12,7 @@
 #   dispatch report [--since YYYY-MM-DD] [-R repo] Show approvals per worker alias from the ledger
 #   dispatch start <issue#> <model> [-R repo] [--no-report]  Spawn a worker on an issue
 #   dispatch status [issue#] [options]    Show all jobs (or one) with live state
+#   dispatch ui [-R repo] [options]       Interactive live monitor: click a job, watch its work (fzf)
 #   dispatch wait <issue#> [options]       Block until a job finishes
 #   dispatch logs <issue#> [-f] [--raw|--events]  Tail worker output
 #   dispatch stop <issue#>                Kill a running worker (keeps the worktree)
@@ -199,6 +200,12 @@ cmd_doctor() {
   else
     echo "  MISS timeout or gtimeout (install with: brew install coreutils)"
     ok=0
+  fi
+  # Optional, so it never clears `ok`: everything except `dispatch ui` works without fzf.
+  if command -v fzf >/dev/null 2>&1; then
+    echo "  ok   fzf ($(fzf --version 2>/dev/null | head -1)) — 'dispatch ui' available"
+  else
+    echo "  opt  fzf not installed — 'dispatch ui' unavailable (brew install fzf)"
   fi
   echo
   echo "Providers:"
@@ -607,6 +614,204 @@ cmd_status() {
     print_job_row "$jd" "$stale_after"
   done
   [[ "$found" == 1 ]] || echo "  (none)"
+}
+
+# ---------------------------------------------------------------------------
+# dispatch ui — interactive job monitor built on fzf.
+#
+# The list is the top-level summary (one line per job: state, worker, last event); the preview
+# pane is the drill-down for the selected job; Enter (or double-click — fzf's mouse support is on
+# by default) drops into that worker's live log stream. It renders the same on-disk state that
+# `dispatch status` reads, so it needs no daemon and can be quit/reopened freely. The few actions
+# it offers (stop/gate/pr) shell out to the existing subcommands — the UI owns no behavior.
+#
+# Live refresh rides on fzf --listen (0.36+): a `start:` binding spawns `dispatch ui --watch`,
+# which POSTs reload+refresh-preview to fzf's local endpoint every --interval seconds and exits
+# the moment a POST fails (fzf gone). On an older fzf, or without curl, the list still works and
+# ctrl-r refreshes manually.
+UI_FZF_MIN="0.36.0"
+
+# UTC ISO-8601 (the `now` format) -> epoch seconds. GNU date first, BSD date second, empty on both
+# failing — callers must treat "" as unknown, mirroring how ledger consumers read absent `finish`.
+epoch_from_utc() { # epoch_from_utc <YYYY-MM-DDTHH:MM:SSZ>
+  [[ -n "${1:-}" ]] || return 0
+  date -u -d "$1" +%s 2>/dev/null \
+    || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null \
+    || true
+}
+
+# One fzf line per job: "<sort-key>\t<issue>\t<display columns>". The first two fields are cut/
+# hidden (--with-nth 3..) but field 2 stays addressable as {2} for bindings. Active jobs sort
+# first so the busy workers are always at the top of the list.
+ui_rows() { # ui_rows <state-dir> <stale-after>
+  local sd="$1" stale_after="$2" jd n st key color ev alias model attempt max_attempts age started
+  local c0=$'\033[0m' cg=$'\033[32m' cy=$'\033[33m' cr=$'\033[31m' cc=$'\033[36m' cd=$'\033[2m'
+  for jd in "$sd"/jobs/*/; do
+    [[ -d "$jd" ]] || continue
+    n="$(basename "$jd")"
+    st="$(job_state "$jd" "$stale_after")"
+    case "$st" in
+      RUNNING) key=0; color="$cg" ;;
+      STALLED) key=1; color="$cy" ;;
+      DONE)    key=2; color="$cc" ;;
+      FAILED*) key=3; color="$cr" ;;
+      *)       key=4; color="$cd" ;;
+    esac
+    # `|| true` on every meta read: keys are absent in jobs started before they existed, and a
+    # missing key must render as blank, not kill the whole list under errexit/pipefail.
+    alias="$(meta_get "$jd" alias || true)"; model="$(meta_get "$jd" model || true)"
+    attempt="$(meta_get "$jd" attempt || true)"; max_attempts="$(meta_get "$jd" max_attempts || true)"
+    started="$(epoch_from_utc "$(meta_get "$jd" started_at || true)")"
+    age=""
+    if [[ "$started" =~ ^[0-9]+$ ]]; then age="$(human_duration $(( $(date +%s) - started )))"; fi
+    if [[ "$st" != "RUNNING" && "$st" != "STALLED" && -s "$jd/last_message.txt" ]]; then
+      ev="final: $(tr '\n' ' ' < "$jd/last_message.txt" | cut -c1-70)"
+    else
+      ev="$(last_event "$jd" | tr '\t' ' ' | cut -c1-70)"
+    fi
+    printf '%s\t%s\t#%-4s %s%-11s%s %-8s %-22s %-4s %6s  %s%s%s\n' \
+      "$key" "$n" "$n" "$color" "$st" "$c0" "${alias:-?}" "${model:0:22}" \
+      "${attempt:-1}/${max_attempts:-1}" "$age" "$cd" "$ev" "$c0"
+  done | sort -t$'\t' -k1,1n -k2,2n
+}
+
+# The drill-down pane: everything the foreman checks by hand before trusting a worker — state and
+# timing, the commits and diffstat it has produced so far, its recent activity (rendered events,
+# same renderer as `dispatch logs`), and the gate verdict / final message once they exist.
+ui_preview() { # ui_preview <state-dir> <issue> <stale-after>
+  local sd="$1" n="$2" stale_after="$3" jd st wt base title gate line
+  local c0=$'\033[0m' cb=$'\033[1m' cd=$'\033[2m'
+  jd="$sd/jobs/$n"
+  [[ -d "$jd" ]] || { echo "no job for issue #$n"; return; }
+  st="$(job_state "$jd" "$stale_after")"
+  title="$(meta_get "$jd" title || true)"
+  printf '%s#%s %s%s  %s\n' "$cb" "$n" "$st" "$c0" "$title"
+  printf 'worker  %s -> %s %s   attempt %s/%s' \
+    "$(meta_get "$jd" alias || true)" "$(meta_get "$jd" provider || true)" "$(meta_get "$jd" model || true)" \
+    "$(meta_get "$jd" attempt || echo 1)" "$(meta_get "$jd" max_attempts || echo 1)"
+  if [[ "$(meta_get "$jd" gate || true)" == "1" ]]; then printf '   gate on (%s)' "$(meta_get "$jd" gate_model || true)"; fi
+  printf '\n'
+  printf 'branch  %s   started %s\n' "$(meta_get "$jd" branch || true)" "$(meta_get "$jd" started_at || true)"
+  wt="$(meta_get "$jd" worktree || true)"
+  printf 'tree    %s\n' "$wt"
+  line="$(meta_get "$jd" pr_url || true)"
+  if [[ -n "$line" ]]; then printf 'pr      %s\n' "$line"; fi
+
+  base="$(meta_get "$jd" base_sha || true)"
+  if [[ -d "$wt" ]] && git -C "$wt" rev-parse --verify HEAD >/dev/null 2>&1; then
+    printf '\n%s── commits ─────────────────────────%s\n' "$cd" "$c0"
+    if [[ -n "$base" ]]; then
+      line="$(git -C "$wt" log --oneline "$base..HEAD" 2>/dev/null | head -8 || true)"
+      if [[ -n "$line" ]]; then printf '%s\n' "$line"; else echo "(none yet)"; fi
+      printf '\n%s── diff ────────────────────────────%s\n' "$cd" "$c0"
+      git -C "$wt" diff --stat "$base..HEAD" 2>/dev/null | tail -12 || true
+    else
+      echo "(no base_sha recorded — job predates range review)"
+    fi
+    line="$(git -C "$wt" status --porcelain 2>/dev/null | head -1 || true)"
+    if [[ -n "$line" ]]; then printf '%s(worktree has uncommitted changes)%s\n' "$cd" "$c0"; fi
+  elif [[ -n "$wt" ]]; then
+    printf '\n%s(worktree missing — cleaned?)%s\n' "$cd" "$c0"
+  fi
+
+  if [[ -s "$jd/events.jsonl" ]]; then
+    printf '\n%s── recent activity ─────────────────%s\n' "$cd" "$c0"
+    grep -E '^\s*\{' "$jd/events.jsonl" 2>/dev/null | tail -12 | while IFS= read -r line; do
+      render_event "$jd" "$line"
+    done
+  fi
+
+  gate="$jd/gate.md"
+  if [[ -s "$gate" ]]; then
+    printf '\n%s── gate ────────────────────────────%s\n' "$cd" "$c0"
+    # From the last VERDICT line to the end: the verdict the gate acted on plus its findings.
+    awk '/^VERDICT: /{n=NR} {l[NR]=$0} END{if(n)for(i=n;i<=NR&&i<n+10;i++)print l[i]; else print "(no verdict line)"}' "$gate"
+  fi
+
+  if [[ "$st" != "RUNNING" && "$st" != "STALLED" && -s "$jd/last_message.txt" ]]; then
+    printf '\n%s── final message ───────────────────%s\n' "$cd" "$c0"
+    head -c 1200 "$jd/last_message.txt"; echo
+  fi
+}
+
+cmd_ui() {
+  local repo="." stale_after="300" interval="2" mode="" n="" arg
+  while [[ $# -gt 0 ]]; do
+    arg="$1"; shift
+    case "$arg" in
+      -R|--repo) [[ $# -gt 0 ]] || die "$arg requires a path"; repo="$1"; shift ;;
+      --stale-after) [[ $# -gt 0 ]] || die "--stale-after requires seconds"; stale_after="$1"; shift ;;
+      --interval) [[ $# -gt 0 ]] || die "--interval requires seconds"; interval="$1"; shift ;;
+      --rows) mode="rows" ;;
+      --watch) mode="watch" ;;
+      --preview) [[ $# -gt 0 ]] || die "--preview requires an issue#"; mode="preview"; n="$1"; shift ;;
+      *) die "usage: dispatch ui [-R repo] [--stale-after seconds] [--interval seconds]" ;;
+    esac
+  done
+  [[ "$stale_after" =~ ^[0-9]+$ ]] || die "--stale-after must be a non-negative integer"
+  [[ "$interval" =~ ^[0-9]+$ && "$interval" -ge 1 ]] || die "--interval must be a positive integer"
+  local root sd; root="$(repo_root "$repo")"; sd="$root/.dispatch"
+
+  # Every fzf binding re-enters this script through these helper modes, so reload/preview always
+  # render current on-disk state; -R makes them independent of whatever cwd fzf hands them.
+  local self_q root_q rows_cmd
+  self_q="$(printf '%q' "$SELF_BIN")"; root_q="$(printf '%q' "$root")"
+  rows_cmd="$self_q ui --rows -R $root_q --stale-after $stale_after"
+
+  case "$mode" in
+    rows) ui_rows "$sd" "$stale_after"; return ;;
+    preview) validate_issue "$n"; ui_preview "$sd" "$n" "$stale_after"; return ;;
+    watch)
+      # Refresh pump, spawned by fzf's start binding. FZF_PORT is exported by fzf --listen to the
+      # processes it starts; a failed POST means fzf is gone, so the pump exits with it.
+      [[ -n "${FZF_PORT:-}" ]] || die "ui --watch runs only under fzf --listen"
+      while sleep "$interval"; do
+        curl -sS -m 2 -X POST ${FZF_API_KEY:+-H "x-api-key: $FZF_API_KEY"} \
+          --data "reload($rows_cmd)+refresh-preview" "localhost:$FZF_PORT" >/dev/null 2>&1 || break
+      done
+      return ;;
+  esac
+
+  need fzf "install it to use dispatch ui (brew install fzf)"
+  [[ -d "$sd/jobs" ]] && compgen -G "$sd/jobs/*/" >/dev/null \
+    || { echo "no dispatched jobs in $(basename "$root")."; return; }
+
+  local fzf_ver="" live=1
+  fzf_ver="$(fzf --version 2>/dev/null | grep -oE '^[0-9]+\.[0-9]+(\.[0-9]+)?' || true)"
+  [[ -n "$fzf_ver" ]] && ver_ge "$fzf_ver" "$UI_FZF_MIN" && command -v curl >/dev/null 2>&1 || live=0
+
+  local header="enter/double-click: live logs · ctrl-s: stop · ctrl-g: gate (background) · ctrl-p: pr · ctrl-r: refresh · esc: quit"
+  if [[ "$live" == 0 ]]; then
+    header="$header
+(fzf < $UI_FZF_MIN or no curl: list does not self-refresh — use ctrl-r)"
+  fi
+
+  local -a live_args=()
+  if [[ "$live" == 1 ]]; then
+    # Random localhost port; the API key keeps other local users from posting actions into the UI.
+    FZF_API_KEY="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+    export FZF_API_KEY
+    live_args=(--listen 0 --bind "start:execute-silent(nohup $self_q ui --watch -R $root_q --stale-after $stale_after --interval $interval >/dev/null 2>&1 &)")
+  fi
+
+  # cd to the repo root: stop/gate/pr/logs resolve the repo from cwd, and Enter's log stream must
+  # target this repo whatever directory `dispatch ui` was launched from. `|| true` because quitting
+  # fzf (esc / ctrl-c) exits non-zero and is the normal way out.
+  ( cd "$root" && ui_rows "$sd" "$stale_after" | fzf \
+      --ansi --no-sort --layout=reverse --info=inline \
+      --delimiter $'\t' --with-nth 3.. \
+      --border --border-label " dispatch · $(basename "$root") " \
+      --header "$header" \
+      --preview "$self_q ui --preview {2} -R $root_q --stale-after $stale_after" \
+      --preview-window 'right,55%,border-left,wrap' \
+      --bind "enter:execute($self_q logs {2} -f)" \
+      --bind "double-click:execute($self_q logs {2} -f)" \
+      --bind "ctrl-s:execute-silent($self_q stop {2})+reload($rows_cmd)+refresh-preview" \
+      --bind "ctrl-g:execute-silent(nohup $self_q gate {2} >/dev/null 2>&1 &)" \
+      --bind "ctrl-p:execute($self_q pr {2}; echo; printf '[press enter to return] '; read -r _)" \
+      --bind "ctrl-r:reload($rows_cmd)+refresh-preview" \
+      "${live_args[@]}" \
+  ) || true
 }
 
 cmd_logs() {
@@ -1518,6 +1723,7 @@ main() {
     report) cmd_report "$@" ;;
     start)  cmd_start "$@" ;;
     status) cmd_status "$@" ;;
+    ui)     cmd_ui "$@" ;;
     wait)   cmd_wait "$@" ;;
     logs)   cmd_logs "$@" ;;
     stop)   cmd_stop "$@" ;;
@@ -1528,7 +1734,7 @@ main() {
     notify) cmd_notify "$@" ;;
     version|--version|-v) echo "dispatch $VERSION" ;;
     ""|help|-h|--help)
-      sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+      sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
     *) die "unknown command '$cmd' (try: dispatch help)" ;;
   esac
 }

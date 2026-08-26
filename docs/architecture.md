@@ -34,7 +34,7 @@ One channel deliberately sits outside that sequence: a reporting `claude` worker
 
 `codex exec --json` writes structured events to stdout and human progress to stderr. Dispatch keeps those streams separate:
 
-- `events.jsonl` is stdout JSONL for status parsing and future tooling
+- `events.jsonl` is stdout JSONL for status parsing and tooling — `dispatch ui` renders its tail live (see [ui.md](ui.md))
 - `worker.log` is stderr for `dispatch logs`
 - `last_message.txt` is written by `codex exec -o` and used by `dispatch status` after a worker finishes
 

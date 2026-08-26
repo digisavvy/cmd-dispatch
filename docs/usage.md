@@ -144,6 +144,22 @@ States are:
 
 For a single issue, status also prints the worktree path. `STALLED` is a heuristic, not a failure; some legitimate tasks are quiet during a long tool call. Use `--stale-after` to change the threshold in seconds.
 
+### `dispatch ui [-R repo] [--stale-after seconds] [--interval seconds]`
+
+Interactive live monitor built on `fzf` (the one optional dependency, reported by `dispatch
+doctor`): every job as a selectable row (state, worker, latest event), a detail pane for the
+selected job (commits, diffstat, recent activity, gate verdict, final message), and Enter or a
+double-click to drop into that worker's live logs. `ctrl-s` stops, `ctrl-g` gates in the
+background, `ctrl-p` opens the PR, `esc` quits. The list self-refreshes every `--interval`
+seconds (default 2) on fzf ≥ 0.36 with `curl`; otherwise `ctrl-r` refreshes manually.
+
+```sh
+dispatch ui
+dispatch ui -R ~/code/my-project --interval 5
+```
+
+See [ui.md](ui.md) for the full key map, the design notes, and how the live refresh works.
+
 ### `dispatch wait <issue#>|--any [--status done|any|stalled] [--stale-after seconds] [--timeout seconds] [--interval seconds]`
 
 Waits for one job to reach a terminal state. By default it waits indefinitely, checks every five seconds, prints the final status row, and exits `0` for `DONE` or with the worker's exit code for `FAILED`; `KILLED` exits nonzero. `--status done` also treats every non-`DONE` result as failure. `--status stalled` additionally wakes with exit code `0` when the job is heuristically `STALLED`; `--stale-after` changes the default 300-second threshold. A timeout exits `124`.

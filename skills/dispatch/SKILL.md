@@ -20,6 +20,7 @@ Don't use it for a change you should just make directly, or for non-code issues 
 1. **Run from inside the target repo** (the one with the issues) — it needs a local git clone.
 2. **Dispatch:** `dispatch start <issue#> <alias>` (or `/dispatch put 5.6 on #41, sonnet on #42`).
 3. **Watch:** `dispatch status` · `dispatch wait <n>` (blocks until done) · `dispatch logs <n> -f --events`.
+   For a human at the terminal, `dispatch ui` is the interactive version (fzf list of workers, click into live logs).
 4. **Review (merge gate):** read the diff in the worktree + the worker's final message. Optionally
    run `dispatch gate <n> [--gate-model <alias>]` for a headless review.
 5. **Land:** `dispatch pr <n>` (pushes branch, opens PR). Never PR a FAILED job or unreviewed work.

@@ -67,6 +67,7 @@ dispatch start 42 5.6 --gate  # opt in: review on completion, opening a PR only 
 dispatch gate 41              # gate a finished job now (default reviewer: opus)
 dispatch rework 41            # send a gate REJECT back to the worker (needs --max-attempts > 1)
 dispatch status               # RUNNING / DONE / FAILED / KILLED + last event / final message
+dispatch ui                   # interactive live monitor: click a worker, watch its work (needs fzf)
 dispatch usage                # subscription usage bars and reset windows
 dispatch logs 41 -f           # tail live output
 dispatch stop 52              # kill a worker (keeps the worktree)
