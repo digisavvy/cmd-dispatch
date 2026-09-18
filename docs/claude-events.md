@@ -22,4 +22,9 @@ also recognizes a `tool_use` content block by its `.name` when one appears in th
 ```
 
 Claude writes stream JSON to stdout and diagnostics to stderr. The final message is the last `.result`
-(falling back to `.text`) from a `result` record.
+(falling back to `.text`) from a `result` record — dispatch keeps the **last line** of that value
+(`jq -r … | tail -1`), so a multi-line report is truncated when stored; see
+[troubleshooting.md](troubleshooting.md).
+
+deepseek runs this same CLI and shares this envelope while diverging elsewhere in the vocabulary:
+see [deepseek-events.md](deepseek-events.md).

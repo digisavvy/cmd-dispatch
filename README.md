@@ -134,6 +134,7 @@ one — and the worker still sees its send succeed either way.
 - [Limitations](docs/limitations.md) - current boundaries and missing commands
 - [Codex events](docs/codex-events.md) - observed `codex exec --json` event vocabulary
 - [Claude events](docs/claude-events.md) - observed Claude stream-JSON event vocabulary
+- [DeepSeek events](docs/deepseek-events.md) - the same CLI, a different vocabulary
 
 ## Design notes / limits
 
