@@ -51,6 +51,13 @@ Then edit **`models.conf`** so your aliases name a provider and model (doctor de
 sonnet = claude sonnet
 ```
 
+**DeepSeek is the one provider with no CLI of its own.** A `deepseek` worker is the `claude` CLI
+pointed at DeepSeek's Anthropic-compatible endpoint by a per-job env prelude, so there is nothing
+extra to install — only an API key at `~/.claude/deepseek/key`. `dispatch doctor` reports it on a
+row of its own: `installed deepseek (via claude CLI + ~/.claude/deepseek/key)`, or `MISSING` when
+that key is absent — or when the key is present but the `claude` CLI is not. Alias it like any
+other provider, `ds = deepseek deepseek-flash`.
+
 ## Use
 
 In Claude Code, from inside the target repo:
@@ -95,14 +102,15 @@ Review & merge: dispatch pr 41     Worker errored — inspect: dispatch logs 52
 - Notifications are additive: the exit code is already on disk before they fire, so a wedged
   channel never blocks a worker or the foreman's loop.
 
-A `claude` worker additionally messages the **foreman's Claude Code session** when it finishes, so
-the foreman is told rather than having to poll `dispatch status`. This rides on
+A `claude` or `deepseek` worker additionally messages the **foreman's Claude Code session** when it
+finishes, so the foreman is told rather than having to poll `dispatch status`. This rides on
 [cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging), the
 session-to-session channel Claude Code shipped in v2.1.224 (August 2026) — dispatch adopted it the
 week it landed, with the design probes recorded in
 [docs/messaging-research.md](docs/messaging-research.md). This is a separate channel that
-changes nothing above, and it is Claude-only — codex, gemini, and kimi workers have no inbox and
-stay silent. Opt out per job with `--no-report`. Run the foreman in a prompting mode: a `bypassPermissions`
+changes nothing above, and it is Claude-Code-only — a `deepseek` worker *is* the `claude` CLI
+against DeepSeek's endpoint, so it gets the same inbox, while codex, gemini, and kimi workers have
+no inbox and stay silent. Opt out per job with `--no-report`. Run the foreman in a prompting mode: a `bypassPermissions`
 foreman holds the report instead of delivering it — verified never to arrive at a non-interactive
 one — and the worker still sees its send succeed either way.
 `dispatch doctor` reports whether the channel is available. See
