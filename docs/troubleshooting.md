@@ -72,3 +72,72 @@ Then work through the reasons a report legitimately does not arrive, in likeliho
 
 If a *running* worker also cannot be reached for steering, remember its socket disappears at exit —
 "already gone" is a normal outcome, not a fault. Fall back to `dispatch rework` or stop/re-start.
+
+## `dispatch logs <n> --events` prints a wall of identical `started` lines
+
+`render_event`'s `claude`/`deepseek` branch ends in this line (`bin/dispatch:202`):
+
+```sh
+elif .type=="system" then "started" else .type end'
+```
+
+It collapses *every* `system` record to the literal string `started`. That was written against
+claude's stream, where the only `system` record observed is `init` (see
+[claude-events.md](claude-events.md)), so the line reads as "the run started".
+
+A deepseek worker emits one `system`/`thinking_tokens` record per thinking-token chunk — 19,055 of
+them in the captured run (see [deepseek-events.md](deepseek-events.md)). `dispatch logs <n> --events`
+renders a 40-line window over the stream (`bin/dispatch:716`, `tail -40 "$events" | while … render_event`),
+and for a deepseek job that window is all `thinking_tokens`. Every line renders as the same word, so
+the output shows no tool names and no message text — 34 consecutive `started` lines in the capture.
+
+**Read a channel that isn't the event window:**
+
+- `dispatch logs <n>` (no flag) tails `worker.log` — the CLI's stderr, its human progress stream.
+- `dispatch logs <n> --raw` shows that same file verbatim.
+- `dispatch logs <n> -f --events` still fills with `started`; it is the event stream, not the worker.
+
+## `dispatch wait` shows the final message as a fragment
+
+`dispatch wait` prints the worker's final message as a fragment that starts mid-report, even though
+the `result` record holds the complete text.
+
+Two lines produce it. `last_message.txt` is written by `bin/dispatch:552`:
+
+```sh
+jq -r 'select(.type=="result") | .result // .text // empty' "$jd/events.jsonl" | tail -1 > "$jd/last_message.txt"
+```
+
+`jq -r` prints `.result` raw, so a multi-paragraph report comes out as many lines; `tail -1` then
+keeps the **last line of that text**, not the last record. Every line above it is discarded. If the
+report ends with a newline, the surviving line is empty and `final:` shows nothing at all.
+
+The display side is `bin/dispatch:655`, which folds newlines to spaces and cuts the line at 160
+characters:
+
+```sh
+ev="final: $(tr '\n' ' ' < "$jd/last_message.txt" | cut -c1-160)"
+```
+
+so a long final line is additionally clipped mid-sentence. `cmd_wait` reaches this through
+`print_job_row` (`bin/dispatch:785`); `dispatch status <n>` prints the same line via
+`bin/dispatch:679`.
+
+The identical `tail -1` pipeline is used for claude (`bin/dispatch:521`) and kimi
+(`bin/dispatch:589`). Codex avoids the problem by letting its CLI write the file (`-o`,
+`bin/dispatch:493`).
+
+The gate does *not* have this bug — `bin/dispatch:844` slurps the records and takes the last one:
+
+```sh
+jq -rs '[.[] | select(.type=="result") | .result // .text // empty] | last // empty'
+```
+
+so a gate reviewing the same job sees the full report while `dispatch wait` does not. The gate
+prompt's `UNVERIFIED WORKER CLAIM` block is built from the same truncated file (`bin/dispatch:996`).
+
+Read the report as the worker wrote it:
+
+```sh
+jq -r 'select(.type=="result") | .result' .dispatch/jobs/<n>/events.jsonl
+```
