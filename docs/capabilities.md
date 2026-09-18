@@ -4,7 +4,8 @@ What a dispatched worker can and cannot do, per provider. Two different mechanis
 limits, and only one of them is a real boundary:
 
 - **OS sandbox** (enforced): process-level confinement of `Bash`/shell commands. Only **claude**
-  workers run under it today (Claude Code's native Seatbelt/bubblewrap sandbox). It fails closed.
+  and **deepseek** workers run under it today (Claude Code's native Seatbelt/bubblewrap sandbox).
+  It fails closed.
 - **Prompt rules** (not a boundary): every worker prompt forbids pushing, branch switching, reading
   credentials, and touching Git hooks/config. A model can ignore these — they reduce accidents, not
   attacks. See [SECURITY.md](../SECURITY.md) for the full trust model.
@@ -14,22 +15,28 @@ boundary between a worker and the rest of your machine.
 
 ## Per-provider matrix
 
-| Capability | codex | claude | kimi | gemini |
-|---|---|---|---|---|
-| Runtime | `codex exec` | `claude -p` | `kimi -p` | `gemini -p` |
-| OS sandbox on shell | `workspace-write` | native OS sandbox | **none** | **none** |
-| Write to worktree | yes | yes | yes | yes |
-| Write to shared `.git` (commit) | yes (`--add-dir`) | yes (sandbox auto-allows) | yes (`--add-dir`) | **no** — commits fail |
-| Alter `.git/hooks`, `config` | yes (open) | **denied** by sandbox | yes (open) | n/a |
-| Network egress from shell | **open** | **denied** (empty allowlist) | **open** | **open** |
-| Read repo secrets (`.env` in checkout) | yes | yes | yes | yes |
-| Read `~/.ssh`, `~/.aws` | not blocked | **denied** for sandboxed cmds | not blocked | not blocked |
-| Unsandboxed-retry escape hatch | n/a | **disabled** | n/a | n/a |
-| Report to foreman session | no | yes (default) | no | no |
-| Status | supported | supported | supported | **unverified stub** |
+| Capability | codex | claude | deepseek | kimi | gemini |
+|---|---|---|---|---|---|
+| Runtime | `codex exec` | `claude -p` | = claude | `kimi -p` | `gemini -p` |
+| OS sandbox on shell | `workspace-write` | native OS sandbox | = claude | **none** | **none** |
+| Write to worktree | yes | yes | = claude | yes | yes |
+| Write to shared `.git` (commit) | yes (`--add-dir`) | yes (sandbox auto-allows) | = claude | yes (`--add-dir`) | **no** — commits fail |
+| Alter `.git/hooks`, `config` | yes (open) | **denied** by sandbox | = claude | yes (open) | n/a |
+| Network egress from shell | **open** | **denied** (empty allowlist) | = claude | **open** | **open** |
+| Read repo secrets (`.env` in checkout) | yes | yes | = claude | yes | yes |
+| Read `~/.ssh`, `~/.aws` | not blocked | **denied** for sandboxed cmds | = claude | not blocked | not blocked |
+| Unsandboxed-retry escape hatch | n/a | **disabled** | = claude | n/a | n/a |
+| Report to foreman session | no | yes (default) | = claude | no | no |
+| Status | supported | supported | = claude | supported | **unverified stub** |
 
 Notes:
 
+- **deepseek** is not a separate profile, so it gets one column of pointers instead of a copy of
+  claude's. It is the `claude` CLI pointed at DeepSeek's Anthropic-compatible endpoint
+  (`ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`) by a per-job env prelude, so every
+  `= claude` cell above is the *same* settings, not a similar profile — same native sandbox, same
+  reporting gate. It is the one provider with no binary of its own; `dispatch doctor` reports it on
+  a row of its own, keyed on `~/.claude/deepseek/key`.
 - **claude** is the only hardened profile. Its sandbox covers **`Bash` only** — the built-in Edit
   tool still has `--add-dir` write access to the shared `.git` common directory, so `acceptEdits`
   scopes edits to the worktree + `--add-dir` paths instead. Claude's own API traffic runs in the
@@ -63,13 +70,14 @@ CLI's built-in agent tools. dispatch does **not** wire up any extra tooling:
   [limitations.md](limitations.md).
 - **No browser.** Real-browser verification is a separate path (the cowork worker), not something a
   dispatched worker can do in-sandbox. See [browser-verification.md](browser-verification.md).
-- **Cross-session messaging (claude only).** By default a claude worker is a *reporting worker*: it
-  messages the foreman's Claude Code session once when it finishes. This is Claude Code's native
-  session-to-session channel, carried by the CLI in the parent process — it works with zero shell
-  egress and is not a hole in the sandbox. A reporting worker is also started with
-  `crossSessionInbound: "accept"`, so it receives foreman messages without an approval dialog.
-  Opt out with `dispatch start ... --no-report`; codex, kimi, and gemini workers have no inbox and
-  are always silent. See [modes.md](modes.md#a-second-axis-reporting-and-silent-workers).
+- **Cross-session messaging (claude and deepseek).** By default a claude or deepseek worker is a
+  *reporting worker*: it messages the foreman's Claude Code session once when it finishes. This is
+  Claude Code's native session-to-session channel, carried by the CLI in the parent process — it
+  works with zero shell egress and is not a hole in the sandbox. A reporting worker is also started
+  with `crossSessionInbound: "accept"`, so it receives foreman messages without an approval dialog.
+  Opt out with `dispatch start ... --no-report`; deepseek is gated in because it runs that same CLI,
+  so it reports the same way. codex, kimi, and gemini workers have no inbox and are always silent.
+  See [modes.md](modes.md#a-second-axis-reporting-and-silent-workers).
 
 ## Capability implications for task routing
 
@@ -86,6 +94,8 @@ The optional merge gate reviews a diff and needs no writes:
 
 - **codex** gate: `--sandbox read-only`.
 - **claude** gate: same sandbox settings as the claude worker (egress denied, creds denied).
+- **deepseek** gate: same settings as the claude gate, run inside a subshell so the prelude's env
+  never leaks into a sibling claude worker or gate in the same foreman process.
 - **kimi** gate: no sandbox.
 - **gemini**: no gate runner.
 
