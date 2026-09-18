@@ -35,3 +35,9 @@ haiku     = claude haiku
 kimi      = kimi moonshot-ai/kimi-k3
 kimi-code = kimi moonshot-ai/kimi-k2.7-code
 kimi-fast = kimi moonshot-ai/kimi-k2.7-code-highspeed
+
+# DeepSeek — rides the `claude` CLI against https://api.deepseek.com/anthropic.
+# No separate binary; needs a key at ~/.claude/deepseek/key. Two real ids exist:
+# deepseek-flash (V4.1-Flash) and deepseek-v4-pro.
+# ds      = deepseek deepseek-flash
+# ds-pro  = deepseek deepseek-v4-pro

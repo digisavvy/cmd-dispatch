@@ -61,6 +61,26 @@ repo_root() {
     || die "not inside a git repo. Run from the target repo (the one with the issues), or pass -R <path>."
 }
 
+# Env prelude for the deepseek provider. Emitted verbatim into run.sh and evaluated at
+# runtime: the API key is read from ~/.claude/deepseek/key at exec time, so it never
+# appears in argv (visible to `ps`) nor in any file under the job dir.
+# ANTHROPIC_MODEL is deliberately unset -- --model carries the alias's model string.
+deepseek_env_prelude() {
+  cat <<'DSPRELUDE'
+[ -f "$HOME/.claude/deepseek/models.env" ] && . "$HOME/.claude/deepseek/models.env"
+unset ANTHROPIC_API_KEY
+export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+export ANTHROPIC_AUTH_TOKEN="$(tr -d '[:space:]' < "$HOME/.claude/deepseek/key")"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="${DS_OPUS:-deepseek-v4-pro}"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="${DS_SONNET:-deepseek-flash}"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="${DS_HAIKU:-deepseek-flash}"
+export CLAUDE_CODE_SUBAGENT_MODEL="${DS_SUBAGENT:-deepseek-flash}"
+export CLAUDE_CODE_EFFORT_LEVEL="${DS_EFFORT:-max}"
+export CLAUDE_CODE_AUTO_COMPACT_WINDOW="${DS_COMPACT_WINDOW:-786432}"
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"
+DSPRELUDE
+}
+
 # Print "provider model" for an alias, or infer the provider from a raw model slug.
 resolve_model() {
   local key="$1" val="" provider model
@@ -74,7 +94,7 @@ resolve_model() {
   if [[ -n "$val" ]]; then
     provider="${val%%[[:space:]]*}"
     model="${val#"$provider"}"; model="${model#${model%%[![:space:]]*}}"
-    [[ "$provider" =~ ^(codex|claude|gemini|kimi)$ && -n "$model" ]] \
+    [[ "$provider" =~ ^(codex|claude|deepseek|gemini|kimi)$ && -n "$model" ]] \
       || die "invalid model alias '$key': expected '<provider> <model>' in $MODELS_CONF"
     printf '%s %s\n' "$provider" "$model"
     return
@@ -82,6 +102,7 @@ resolve_model() {
   case "$key" in
     gpt-*|codex-*) provider="codex" ;;
     claude-*) provider="claude" ;;
+    deepseek-*) provider="deepseek" ;;
     gemini-*) provider="gemini" ;;
     moonshot-*|kimi-*) provider="kimi" ;;
     *) die "model alias '$key' not found and provider cannot be inferred; add it to $MODELS_CONF as '<alias> = <provider> <model>'" ;;
@@ -152,7 +173,7 @@ render_event() { # render_event <jobdir> <json-line>
       elif .type=="turn.completed" then "turn done (\(.usage.output_tokens // "?") out tok)"
       elif .type=="thread.started" then "started"
       else .type end' 2>/dev/null || echo "${line:0:140}"
-    elif [[ "$provider" == "claude" ]]; then
+    elif [[ "$provider" == "claude" || "$provider" == "deepseek" ]]; then
       printf '%s\n' "$line" | jq -r '
         if .type=="assistant" then
           ([.message.content[]? | if .type=="text" then "msg: " + ((.text//""|gsub("\\s+";" "))[0:120]) elif .type=="tool_use" then "tool: " + (.name//"unknown") else empty end] | join(", "))
@@ -211,6 +232,17 @@ cmd_doctor() {
       echo "  MISSING    $provider"
     fi
   done
+  # deepseek rides the claude CLI against DeepSeek's Anthropic-compatible endpoint,
+  # so it needs no binary of its own -- only the shared key file.
+  if [[ -s "$HOME/.claude/deepseek/key" ]]; then
+    if command -v claude >/dev/null 2>&1; then
+      echo "  installed  deepseek  (via claude CLI + ~/.claude/deepseek/key)"
+    else
+      echo "  MISSING    deepseek  (key present, but claude CLI is not installed)"
+    fi
+  else
+    echo "  MISSING    deepseek  (no key at ~/.claude/deepseek/key)"
+  fi
   echo
   echo "Codex model strings (source of truth for models.conf):"
   if command -v codex >/dev/null 2>&1; then
@@ -341,7 +373,7 @@ cmd_start() {
   # disabled by a privacy env var, or a containerised foreman that cannot reach this machine).
   # The unchanged bell/banner/DISPATCH_NOTIFY_CMD path is the only channel in every silent case.
   claude_settings='{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":[]},"credentials":{"files":[{"path":"~/.ssh","mode":"deny"},{"path":"~/.aws","mode":"deny"}]}}}'
-  if [[ "$report" == 1 && "$provider" == "claude" ]]; then
+  if [[ "$report" == 1 && ( "$provider" == "claude" || "$provider" == "deepseek" ) ]]; then
     foreman="$(foreman_name || true)"
   fi
   if [[ -n "$foreman" ]]; then
@@ -476,6 +508,30 @@ if [ "\$(cat "$jd/exitcode" 2>/dev/null)" = "\$worker_ec" ]; then
 fi
 # Ping the human (additive — exitcode is already on disk, so a wedged channel can't block).
 # The #15 gate step slots in above and passes its verdict as the notify message.
+"$dispatch_bin" notify "$n" "\$_state" -R "$root" >/dev/null 2>&1 || true
+EOF
+    ;;
+  deepseek) cat > "$jd/run.sh" <<EOF
+#!/usr/bin/env bash
+# DeepSeek worker: the claude CLI pointed at DeepSeek's Anthropic-compatible endpoint.
+# The env prelude is per-job, not exported into the foreman's shell, so deepseek and
+# claude workers can run side by side -- which is what keeps cross-provider gating alive.
+# Sandbox rationale is identical to the claude branch; verified that allowedDomains:[]
+# gates the Bash tool only and does not block the CLI's own egress to api.deepseek.com.
+$(deepseek_env_prelude)
+( cd "$wt" && claude -p "\$(cat "$jd/prompt.txt")" --model "$model" \\
+    --output-format stream-json --verbose --add-dir "$gitcommon" \\
+    --permission-mode acceptEdits$claude_report_flags \\
+    --settings '$claude_settings' ) \\
+  > "$jd/events.jsonl" 2> "$jd/worker.log"
+worker_ec=\$?
+jq -r 'select(.type=="result") | .result // .text // empty' "$jd/events.jsonl" | tail -1 > "$jd/last_message.txt"
+echo \$worker_ec > "$jd/exitcode"
+_state="DONE"; [ "\$worker_ec" -eq 0 ] || _state="FAILED(\$worker_ec)"
+_attempt="\$(grep -E '^attempt=' "$jd/meta" 2>/dev/null | head -1 | sed 's/^attempt=//')"
+if [ "\$(cat "$jd/exitcode" 2>/dev/null)" = "\$worker_ec" ]; then
+  echo "\$(date -u +%FT%TZ) finish issue=$n state=\${_state%%(*} exit=\$worker_ec attempt=\${_attempt:-1}" >> "$sd/ledger.log"
+fi
 "$dispatch_bin" notify "$n" "\$_state" -R "$root" >/dev/null 2>&1 || true
 EOF
     ;;
@@ -746,6 +802,17 @@ run_gate_model() { # run_gate_model <provider> <model> <worktree> <prompt-file> 
     claude)
       # Same native sandbox as the worker; the gate only reviews the diff, so it should need no writes.
       ( cd "$wt" && "$_timeout" "$gate_timeout" claude -p "$(cat "$prompt_file")" --model "$model" \
+          --output-format stream-json --verbose \
+          --permission-mode acceptEdits \
+          --settings '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":[]},"credentials":{"files":[{"path":"~/.ssh","mode":"deny"},{"path":"~/.aws","mode":"deny"}]}}}' ) >"$scratch/events.jsonl" 2>"$scratch/stderr.log" || ec=$?
+      jq -rs '[.[] | select(.type=="result") | .result // .text // empty] | last // empty' \
+        "$scratch/events.jsonl" 2>/dev/null
+      ;;
+    deepseek)
+      # Subshell: the prelude dies with it, so a deepseek gate never leaks its env
+      # into a sibling claude worker in the same foreman process.
+      ( eval "$(deepseek_env_prelude)"
+        cd "$wt" && "$_timeout" "$gate_timeout" claude -p "$(cat "$prompt_file")" --model "$model" \
           --output-format stream-json --verbose \
           --permission-mode acceptEdits \
           --settings '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":[]},"credentials":{"files":[{"path":"~/.ssh","mode":"deny"},{"path":"~/.aws","mode":"deny"}]}}}' ) >"$scratch/events.jsonl" 2>"$scratch/stderr.log" || ec=$?
