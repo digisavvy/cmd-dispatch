@@ -61,6 +61,18 @@ repo_root() {
     || die "not inside a git repo. Run from the target repo (the one with the issues), or pass -R <path>."
 }
 
+# deepseek has no binary of its own -- it rides the claude CLI against DeepSeek's
+# Anthropic-compatible endpoint, so its preflight is `claude` plus the shared key file.
+require_provider() {
+  local provider="$1"
+  if [[ "$provider" == "deepseek" ]]; then
+    command -v claude >/dev/null 2>&1 || die "deepseek needs the claude CLI, which is not installed"
+    [[ -s "$HOME/.claude/deepseek/key" ]] || die "deepseek needs a key at ~/.claude/deepseek/key"
+    return 0
+  fi
+  command -v "$provider" >/dev/null 2>&1 || die "$provider not installed"
+}
+
 # Env prelude for the deepseek provider. Emitted verbatim into run.sh and evaluated at
 # runtime: the API key is read from ~/.claude/deepseek/key at exec time, so it never
 # appears in argv (visible to `ps`) nor in any file under the job dir.
@@ -363,7 +375,7 @@ cmd_start() {
 
   resolved="$(resolve_model "$alias")"
   read -r provider model <<< "$resolved"
-  command -v "$provider" >/dev/null 2>&1 || die "$provider not installed"
+  require_provider "$provider"
   branch="dispatch/issue-$n"
   wt="$(cd "$root/.." && pwd)/$(basename "$root")-wt-issue-$n"
 
@@ -898,7 +910,7 @@ cmd_gate() {
   fi
 
   resolved="$(resolve_model "$gate_alias")"; read -r provider model <<< "$resolved"
-  command -v "$provider" >/dev/null 2>&1 || die "$provider not installed"
+  require_provider "$provider"
   need_timeout
   issue_json="$(cd "$root" && gh issue view "$n" --json title,body 2>/dev/null)" \
     || die "could not fetch issue #$n via gh"
