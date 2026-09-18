@@ -61,6 +61,15 @@ repo_root() {
     || die "not inside a git repo. Run from the target repo (the one with the issues), or pass -R <path>."
 }
 
+# Vars the deepseek prelude exports. A claude gate must never inherit them: whoever spawns
+# the gate (notably a deepseek run.sh, which nohups it as a child) would otherwise silently
+# redirect the reviewer to DeepSeek and resolve `--model opus` through DS_OPUS.
+DEEPSEEK_ENV_VARS=(ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL
+  ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL
+  CLAUDE_CODE_SUBAGENT_MODEL CLAUDE_CODE_EFFORT_LEVEL CLAUDE_CODE_AUTO_COMPACT_WINDOW
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC)
+anthropic_env_scrub() { printf -- '-u %s ' "${DEEPSEEK_ENV_VARS[@]}"; }
+
 # deepseek has no binary of its own -- it rides the claude CLI against DeepSeek's
 # Anthropic-compatible endpoint, so its preflight is `claude` plus the shared key file.
 require_provider() {
@@ -526,12 +535,15 @@ EOF
   deepseek) cat > "$jd/run.sh" <<EOF
 #!/usr/bin/env bash
 # DeepSeek worker: the claude CLI pointed at DeepSeek's Anthropic-compatible endpoint.
-# The env prelude is per-job, not exported into the foreman's shell, so deepseek and
-# claude workers can run side by side -- which is what keeps cross-provider gating alive.
+# The env prelude lives inside the subshell below, so it reaches the worker and nothing
+# else -- not the foreman's shell, and not the auto-gate spawned further down this script.
+# That containment is what keeps cross-provider gating honest: a deepseek worker gated by
+# --gate-model opus must reach Anthropic, not DeepSeek's opus alias.
 # Sandbox rationale is identical to the claude branch; verified that allowedDomains:[]
 # gates the Bash tool only and does not block the CLI's own egress to api.deepseek.com.
+(
 $(deepseek_env_prelude)
-( cd "$wt" && claude -p "\$(cat "$jd/prompt.txt")" --model "$model" \\
+  cd "$wt" && claude -p "\$(cat "$jd/prompt.txt")" --model "$model" \\
     --output-format stream-json --verbose --add-dir "$gitcommon" \\
     --permission-mode acceptEdits$claude_report_flags \\
     --settings '$claude_settings' ) \\
@@ -813,7 +825,8 @@ run_gate_model() { # run_gate_model <provider> <model> <worktree> <prompt-file> 
       ;;
     claude)
       # Same native sandbox as the worker; the gate only reviews the diff, so it should need no writes.
-      ( cd "$wt" && "$_timeout" "$gate_timeout" claude -p "$(cat "$prompt_file")" --model "$model" \
+      ( cd "$wt" && "$_timeout" "$gate_timeout" env $(anthropic_env_scrub) \
+          claude -p "$(cat "$prompt_file")" --model "$model" \
           --output-format stream-json --verbose \
           --permission-mode acceptEdits \
           --settings '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":[]},"credentials":{"files":[{"path":"~/.ssh","mode":"deny"},{"path":"~/.aws","mode":"deny"}]}}}' ) >"$scratch/events.jsonl" 2>"$scratch/stderr.log" || ec=$?
